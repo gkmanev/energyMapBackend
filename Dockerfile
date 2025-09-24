@@ -1,55 +1,53 @@
-# pull official base image
-FROM python:3.8 as builder
+# -------- builder --------
+FROM python:3.12-slim AS builder
 
-# set work directory
-WORKDIR /usr/src/app
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-# set environment variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+# System deps needed to compile common wheels (psycopg2, lxml, etc.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential gcc libpq-dev \
+  && rm -rf /var/lib/apt/lists/*
 
-# lint
-RUN pip install --upgrade pip
+WORKDIR /tmp/build
 
-# Copy project files
-COPY . .
+# Keep pip modern for better resolver/cache
+RUN python -m pip install --upgrade pip wheel setuptools
 
-# install dependencies
-COPY ./requirements.txt .
-RUN pip wheel --no-cache-dir --no-deps --wheel-dir /usr/src/app/wheels -r requirements.txt
+# Install deps into wheels layer for better caching
+COPY requirements.txt .
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir /tmp/wheels -r requirements.txt
 
-#########
-# FINAL #
-#########
 
-# pull official base image (non-Alpine Python image)
-FROM python:3.8
+# -------- runtime --------
+FROM python:3.12-slim
 
-# create directory for the app user
-RUN mkdir -p /home/app
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    # ensures "python" finds venv/site-packages first (optional)
+    PATH="/usr/local/bin:${PATH}"
 
-# # create the app user
-# RUN addgroup -S app && adduser -S app -G app
+# Runtime libs only (psycopg2 needs libpq at runtime)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+  && rm -rf /var/lib/apt/lists/*
 
-# create the appropriate directories
-ENV HOME=/home/app
-ENV APP_HOME=/home/app/web
-RUN mkdir $APP_HOME
-RUN mkdir $APP_HOME/static
-WORKDIR $APP_HOME
+# Create non-root user & app dir
+RUN useradd -m appuser
+WORKDIR /app
 
-# install dependencies (if required)
-COPY --from=builder /usr/src/app/wheels /wheels
-COPY --from=builder /usr/src/app/requirements.txt .
-RUN pip install --no-cache /wheels/*
+# Install wheels built in the builder stage
+COPY --from=builder /tmp/wheels /wheels
+COPY --from=builder /tmp/build/requirements.txt /app/requirements.txt
+RUN python -m pip install --no-cache-dir /wheels/*
 
-# copy project files
-COPY . $APP_HOME
+# Copy project (last, so code changes don’t bust dependency cache)
+COPY . /app
 
-# chown all the files to the app user
-#RUN chown -R app:app $APP_HOME
+# Make sure the non-root user owns the app
+RUN chown -R appuser:appuser /app
+USER appuser
 
-# change to the app user
-#USER app
-
-CMD ["python", "-u", "main.py"]
+# Default CMD is harmless—Compose will override per service
+# (web service will run gunicorn from docker-compose.yml)
+CMD ["python", "-m", "http.server", "8000"]
