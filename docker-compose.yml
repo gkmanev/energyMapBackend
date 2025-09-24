@@ -1,83 +1,109 @@
-version: '3.8'
+# docker-compose.yml (no version key needed)
+
+x-django-env: &django_env
+  DEBUG: "1"
+  SECRET_KEY: foo
+  DJANGO_ALLOWED_HOSTS: "localhost 127.0.0.1 85.14.6.37 [::1]"
+  PYTHONUNBUFFERED: "1"
+  PYTHONPATH: "/app"
+  # DB (use these in settings.py)
+  DB_HOST: db
+  DB_PORT: "5432"
+  DB_NAME: postgres_latest
+  DB_USER: postgres
+  DB_PASSWORD: postgres
+  # Celery
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/1
+
 services:
   web:
     build:
       context: .
       dockerfile: Dockerfile
-    command: gunicorn data_api.wsgi:application --bind 0.0.0.0:8000
-    ports: ['8000:8000']
-    environment:
-      - POSTGRES_NAME=postgres_latest
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - DEBUG=1
-      - SECRET_KEY=foo
-      - DJANGO_ALLOWED_HOSTS=localhost 127.0.0.1 85.14.6.37 [::1]
-    depends_on: [redis, db]
-    restart: always
-
-  db:
-    image: postgres:16-bookworm
-    volumes: [ "./data/db:/var/lib/postgresql/data" ]
-    environment:
-      - POSTGRES_DB=postgres_latest
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-    restart: always
-
-  redis:
-    image: redis:6-alpine
+    working_dir: /app
+    command: sh -c "python manage.py migrate && gunicorn data_api.wsgi:application --bind 0.0.0.0:8000"
+    ports:
+      - "8000:8000"
+    environment: *django_env
+    volumes:
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: always
 
   celery_worker:
     build:
       context: .
       dockerfile: Dockerfile
-    command: celery -A data_api worker -l info
-    volumes: [ ".:/app" ]
     working_dir: /app
-    environment:
-      - POSTGRES_NAME=postgres_latest
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - DEBUG=1
-      - SECRET_KEY=foo
-      - DJANGO_ALLOWED_HOSTS=localhost 127.0.0.1 85.14.6.37 [::1]
-    depends_on: [redis, web, db]
+    command: sh -c "python manage.py migrate && celery -A data_api worker -l info"
+    environment: *django_env
+    volumes:
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: always
 
   celery_beat:
     build:
       context: .
       dockerfile: Dockerfile
-    command: celery -A data_api beat -l info
-    volumes: [ ".:/app" ]
     working_dir: /app
-    environment:
-      - POSTGRES_NAME=postgres_latest
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - DEBUG=1
-      - SECRET_KEY=foo
-      - DJANGO_ALLOWED_HOSTS=localhost 127.0.0.1 85.14.6.37 [::1]
-    depends_on: [redis]
+    command: celery -A data_api beat -l info
+    environment: *django_env
+    volumes:
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: always
 
-  mqtt:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: python manage.py mymqtt
-    volumes: [ ".:/app" ]
-    working_dir: /app
+  # mqtt:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   working_dir: /app
+  #   # If this isn't a Django management command, change to: python -m entsoe_api.mqtt_runner
+  #   command: python manage.py mymqtt
+  #   environment: *django_env
+  #   volumes:
+  #     - .:/app
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   restart: always
+
+  db:
+    image: postgres:16-bookworm
     environment:
-      - DJANGO_ALLOWED_HOSTS=localhost 127.0.0.1 85.14.6.37 [::1]
-      - POSTGRES_NAME=postgres_latest
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - DEBUG=1
-      - SECRET_KEY=foo
-    depends_on: [db]
+      POSTGRES_DB: postgres_latest
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./data/db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres_latest"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: always
+
+  redis:
+    image: redis:6-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     restart: always
 
 volumes:
