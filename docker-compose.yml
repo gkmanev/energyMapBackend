@@ -1,84 +1,61 @@
-version: '3.8'
 services:
   web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: gunicorn dashboard.wsgi:application --bind 0.0.0.0:8000
-    ports: ['8000:8000']
+    working_dir: /app/project
+    command: sh -c "python manage.py migrate && gunicorn data_api.wsgi:application --bind 0.0.0.0:8000"
     environment:
-      - POSTGRES_NAME=postgres_latest
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - DEBUG=1
-      - SECRET_KEY=foo
+      - PYTHONUNBUFFERED=1
       - DJANGO_ALLOWED_HOSTS=localhost 127.0.0.1 85.14.6.37 [::1]
-    depends_on: [redis, db]
-    restart: always
-
-  db:
-    image: postgres:16-bookworm
-    volumes: [ "./data/db:/var/lib/postgresql/data" ]
-    environment:
-      - POSTGRES_DB=postgres_latest
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-    restart: always
-
-  redis:
-    image: redis:6-alpine
-    restart: always
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=postgres_latest
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    volumes:
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   celery_worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: celery -A dashboard worker -l info
-    volumes: [ ".:/app" ]
-    working_dir: /app
-    environment:
-      - POSTGRES_NAME=postgres_latest
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - DEBUG=1
-      - SECRET_KEY=foo
+    working_dir: /app/project
+    command: sh -c "python manage.py migrate && celery -A data_api worker -l info"
+    environment: &django_env
+      - PYTHONUNBUFFERED=1
       - DJANGO_ALLOWED_HOSTS=localhost 127.0.0.1 85.14.6.37 [::1]
-    depends_on: [redis, web, db]
-    restart: always
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=postgres_latest
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    volumes: [ ".:/app" ]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   celery_beat:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: celery -A dashboard beat -l info
+    working_dir: /app/project
+    command: celery -A data_api beat -l info
+    environment: *django_env
     volumes: [ ".:/app" ]
-    working_dir: /app
-    environment:
-      - POSTGRES_NAME=postgres_latest
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - DEBUG=1
-      - SECRET_KEY=foo
-      - DJANGO_ALLOWED_HOSTS=localhost 127.0.0.1 85.14.6.37 [::1]
-    depends_on: [redis]
-    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   mqtt:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    working_dir: /app/project
     command: python manage.py mymqtt
+    environment: *django_env
     volumes: [ ".:/app" ]
-    working_dir: /app
-    environment:
-      - DJANGO_ALLOWED_HOSTS=localhost 127.0.0.1 85.14.6.37 [::1]
-      - POSTGRES_NAME=postgres_latest
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - DEBUG=1
-      - SECRET_KEY=foo
-    depends_on: [db]
-    restart: always
-
-volumes:
-  postgres_data:
+    depends_on:
+      db:
+        condition: service_healthy
