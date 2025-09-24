@@ -1,61 +1,36 @@
 services:
   web:
-    working_dir: /app/project
-    command: sh -c "python manage.py migrate && gunicorn data_api.wsgi:application --bind 0.0.0.0:8000"
+    working_dir: /app
     environment:
-      - PYTHONUNBUFFERED=1
-      - DJANGO_ALLOWED_HOSTS=localhost 127.0.0.1 85.14.6.37 [::1]
-      - DB_HOST=db
-      - DB_PORT=5432
-      - DB_NAME=postgres_latest
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
-    volumes:
-      - .:/app
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - PYTHONPATH=/app
+      # (same env as above)
+    command: sh -c "python manage.py migrate && gunicorn data_api.wsgi:application --bind 0.0.0.0:8000"
+    volumes: [ ".:/app" ]
+    depends_on: { db: { condition: service_healthy }, redis: { condition: service_healthy } }
 
   celery_worker:
-    working_dir: /app/project
+    working_dir: /app
+    environment:
+      - PYTHONPATH=/app
+      # (same env)
     command: sh -c "python manage.py migrate && celery -A data_api worker -l info"
-    environment: &django_env
-      - PYTHONUNBUFFERED=1
-      - DJANGO_ALLOWED_HOSTS=localhost 127.0.0.1 85.14.6.37 [::1]
-      - DB_HOST=db
-      - DB_PORT=5432
-      - DB_NAME=postgres_latest
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
     volumes: [ ".:/app" ]
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    depends_on: { db: { condition: service_healthy }, redis: { condition: service_healthy } }
 
   celery_beat:
-    working_dir: /app/project
+    working_dir: /app
+    environment:
+      - PYTHONPATH=/app
+      # (same env)
     command: celery -A data_api beat -l info
-    environment: *django_env
     volumes: [ ".:/app" ]
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    depends_on: { db: { condition: service_healthy }, redis: { condition: service_healthy } }
 
   mqtt:
-    working_dir: /app/project
+    working_dir: /app
+    environment:
+      - PYTHONPATH=/app
+      # (same env)
     command: python manage.py mymqtt
-    environment: *django_env
     volumes: [ ".:/app" ]
-    depends_on:
-      db:
-        condition: service_healthy
+    depends_on: { db: { condition: service_healthy } }
