@@ -1,0 +1,140 @@
+2025-09-17 16:16:42,245 - INFO - Script started at 2025-09-17 13:16:42.245989+00:00
+2025-09-17 16:16:43,136 - ERROR - Data extraction (installed_generation_capacity) failed for AL: 
+2025-09-17 16:16:43,645 - INFO - Data extraction (installed_generation_capacity) completed for country: AT
+2025-09-17 16:16:43,834 - ERROR - Data extraction (installed_generation_capacity) failed for BA: 
+2025-09-17 16:16:44,107 - INFO - Data extraction (installed_generation_capacity) completed for country: BE
+2025-09-17 16:16:44,398 - INFO - Data extraction (installed_generation_capacity) completed for country: BG
+2025-09-17 16:16:44,599 - ERROR - Data extraction (installed_generation_capacity) failed for BY: 
+2025-09-17 16:16:44,837 - INFO - Data extraction (installed_generation_capacity) completed for country: CH
+2025-09-17 16:16:45,033 - ERROR - Data extraction (installed_generation_capacity) failed for CWE: 
+2025-09-17 16:16:45,458 - INFO - Data extraction (installed_generation_capacity) completed for country: CY
+2025-09-17 16:16:45,731 - INFO - Data extraction (installed_generation_capacity) completed for country: CZ
+2025-09-17 16:16:45,927 - ERROR - Data extraction (installed_generation_capacity) failed for CZ_DE_SK: 
+2025-09-17 16:16:46,199 - INFO - Data extraction (installed_generation_capacity) completed for country: DE
+2025-09-17 16:16:46,476 - INFO - Data extraction (installed_generation_capacity) completed for country: DE_50HZ
+2025-09-17 16:16:46,763 - INFO - Data extraction (installed_generation_capacity) completed for country: DE_AMPRION
+2025-09-17 16:16:46,985 - ERROR - Data extraction (installed_generation_capacity) failed for DE_AT_LU: 
+2025-09-17 16:16:47,343 - INFO - Data extraction (installed_generation_capacity) completed for country: DE_LU
+2025-09-17 16:16:47,646 - INFO - Data extraction (installed_generation_capacity) completed for country: DE_TENNET
+2025-09-17 16:16:47,920 - INFO - Data extraction (installed_generation_capacity) completed for country: DE_TRANSNET
+2025-09-17 16:16:48,118 - ERROR - Data extraction (installed_generation_capacity) failed for DK: 
+2025-09-17 16:16:48,309 - ERROR - Data extraction (installed_generation_capacity) failed for DK_1: 
+2025-09-17 16:16:48,504 - ERROR - Data extraction (installed_generation_capacity) failed for DK_2: 
+2025-09-17 16:16:48,700 - ERROR - Data extraction (installed_generation_capacity) failed for DK_CA: 
+2025-09-17 16:16:49,021 - INFO - Data extraction (installed_generation_capacity) completed for country: EE
+2025-09-17 16:29:05,993 - INFO - Script started at 2025-09-17 13:29:05.993371+00:00
+2025-09-17 16:29:05,993 - ERROR - Data extraction (installed_generation_capacity) failed for AL: 
+2025-09-17 16:29:05,994 - ERROR - Data extraction (installed_generation_capacity) failed for AT: 
+2025-09-17 16:29:05,994 - ERROR - Data extraction (installed_generation_capacity) failed for BA: 
+2025-09-17 16:29:05,994 - ERROR - Data extraction (installed_generation_capacity) failed for BE: 
+2025-09-17 16:29:05,994 - ERROR - Data extraction (installed_generation_capacity) failed for BG: 
+2025-09-17 16:29:05,994 - ERROR - Data extraction (installed_generation_capacity) failed for BY: 
+2025-09-17 16:29:05,995 - ERROR - Data extraction (installed_generation_capacity) failed for CH: 
+2025-09-17 16:29:05,995 - ERROR - Data extraction (installed_generation_capacity) failed for CWE: 
+2025-09-17 16:29:05,995 - ERROR - Data extraction (installed_generation_capacity) failed for CY: 
+2025-09-17 16:29:05,995 - ERROR - Data extraction (installed_generation_capacity) failed for CZ: 
+2025-09-17 16:29:05,995 - ERROR - Data extraction (installed_generation_capacity) failed for CZ_DE_SK: 
+2025-09-17 16:29:05,996 - ERROR - Data extraction (installed_generation_capacity) failed for DE: 
+2025-09-17 16:29:05,996 - ERROR - Data extraction (installed_generation_capacity) failed for DE_50HZ: 
+2025-09-17 16:29:05,996 - ERROR - Data extraction (installed_generation_capacity) failed for DE_AMPRION: 
+2025-09-17 16:29:05,996 - ERROR - Data extraction (installed_generation_capacity) failed for DE_AT_LU: 
+2025-09-17 16:29:05,996 - ERROR - Data extraction (installed_generation_capacity) failed for DE_LU: 
+2025-09-17 16:29:05,997 - ERROR - Data extraction (installed_generation_capacity) failed for DE_TENNET: 
+2025-09-17 16:29:05,997 - ERROR - Data extraction (installed_generation_capacity) failed for DE_TRANSNET: 
+2025-09-17 16:29:05,997 - ERROR - Data extraction (installed_generation_capacity) failed for DK: 
+2025-09-17 16:29:05,997 - ERROR - Data extraction (installed_generation_capacity) failed for DK_1: 
+2025-09-17 16:29:05,997 - ERROR - Data extraction (installed_generation_capacity) failed for DK_2: 
+2025-09-17 16:29:05,997 - ERROR - Data extraction (installed_generation_capacity) failed for DK_CA: 
+2025-09-17 16:29:05,998 - ERROR - Data extraction (installed_generation_capacity) failed for EE: 
+2025-09-17 16:29:05,998 - ERROR - Data extraction (installed_generation_capacity) failed for ES: 
+2025-09-17 16:29:05,998 - ERROR - Data extraction (installed_generation_capacity) failed for FI: 
+2025-09-17 16:29:05,998 - ERROR - Data extraction (installed_generation_capacity) failed for FR: 
+2025-09-17 16:29:05,998 - ERROR - Data extraction (installed_generation_capacity) failed for GB: 
+2025-09-17 16:29:05,999 - ERROR - Data extraction (installed_generation_capacity) failed for GB_NIR: 
+2025-09-17 16:29:05,999 - ERROR - Data extraction (installed_generation_capacity) failed for GR: 
+2025-09-17 16:29:05,999 - ERROR - Data extraction (installed_generation_capacity) failed for HR: 
+2025-09-17 16:29:05,999 - ERROR - Data extraction (installed_generation_capacity) failed for HU: 
+2025-09-17 16:29:05,999 - ERROR - Data extraction (installed_generation_capacity) failed for IE: 
+2025-09-17 16:29:05,999 - ERROR - Data extraction (installed_generation_capacity) failed for IE_SEM: 
+2025-09-17 16:29:06,000 - ERROR - Data extraction (installed_generation_capacity) failed for IS: 
+2025-09-17 16:29:06,000 - ERROR - Data extraction (installed_generation_capacity) failed for IT: 
+2025-09-17 16:29:06,000 - ERROR - Data extraction (installed_generation_capacity) failed for IT_BRNN: 
+2025-09-17 16:29:06,000 - ERROR - Data extraction (installed_generation_capacity) failed for IT_CNOR: 
+2025-09-17 16:29:06,000 - ERROR - Data extraction (installed_generation_capacity) failed for IT_CSUD: 
+2025-09-17 16:29:06,001 - ERROR - Data extraction (installed_generation_capacity) failed for IT_FOGN: 
+2025-09-17 16:29:06,001 - ERROR - Data extraction (installed_generation_capacity) failed for IT_GR: 
+2025-09-17 16:29:06,001 - ERROR - Data extraction (installed_generation_capacity) failed for IT_MACRO_NORTH: 
+2025-09-17 16:29:06,001 - ERROR - Data extraction (installed_generation_capacity) failed for IT_MACRO_SOUTH: 
+2025-09-17 16:29:06,001 - ERROR - Data extraction (installed_generation_capacity) failed for IT_MALTA: 
+2025-09-17 16:29:06,002 - ERROR - Data extraction (installed_generation_capacity) failed for IT_NORD: 
+2025-09-17 16:29:06,002 - ERROR - Data extraction (installed_generation_capacity) failed for IT_NORD_AT: 
+2025-09-17 16:29:06,002 - ERROR - Data extraction (installed_generation_capacity) failed for IT_NORD_CH: 
+2025-09-17 16:29:06,002 - ERROR - Data extraction (installed_generation_capacity) failed for IT_NORD_FR: 
+2025-09-17 16:29:06,002 - ERROR - Data extraction (installed_generation_capacity) failed for IT_NORD_SI: 
+2025-09-17 16:29:06,002 - ERROR - Data extraction (installed_generation_capacity) failed for IT_PRGP: 
+2025-09-17 16:29:06,002 - ERROR - Data extraction (installed_generation_capacity) failed for IT_ROSN: 
+2025-09-17 16:29:06,003 - ERROR - Data extraction (installed_generation_capacity) failed for IT_SACO_AC: 
+2025-09-17 16:29:06,004 - ERROR - Data extraction (installed_generation_capacity) failed for IT_SACO_DC: 
+2025-09-17 16:29:06,004 - ERROR - Data extraction (installed_generation_capacity) failed for IT_SARD: 
+2025-09-17 16:29:06,004 - ERROR - Data extraction (installed_generation_capacity) failed for IT_SICI: 
+2025-09-17 16:29:06,004 - ERROR - Data extraction (installed_generation_capacity) failed for IT_SUD: 
+2025-09-17 16:29:06,004 - ERROR - Data extraction (installed_generation_capacity) failed for LT: 
+2025-09-17 16:29:06,004 - ERROR - Data extraction (installed_generation_capacity) failed for LU: 
+2025-09-17 16:29:06,004 - ERROR - Data extraction (installed_generation_capacity) failed for LV: 
+2025-09-17 16:29:06,004 - ERROR - Data extraction (installed_generation_capacity) failed for MD: 
+2025-09-17 16:29:06,004 - ERROR - Data extraction (installed_generation_capacity) failed for ME: 
+2025-09-17 16:29:06,005 - ERROR - Data extraction (installed_generation_capacity) failed for MK: 
+2025-09-17 16:29:06,005 - ERROR - Data extraction (installed_generation_capacity) failed for MT: 
+2025-09-17 16:29:06,005 - ERROR - Data extraction (installed_generation_capacity) failed for NL: 
+2025-09-17 16:29:06,005 - ERROR - Data extraction (installed_generation_capacity) failed for NO: 
+2025-09-17 16:29:06,005 - ERROR - Data extraction (installed_generation_capacity) failed for NO_1: 
+2025-09-17 16:29:06,005 - ERROR - Data extraction (installed_generation_capacity) failed for NO_2: 
+2025-09-17 16:29:06,007 - ERROR - Data extraction (installed_generation_capacity) failed for NO_3: 
+2025-09-17 16:29:06,007 - ERROR - Data extraction (installed_generation_capacity) failed for NO_4: 
+2025-09-17 16:29:06,007 - ERROR - Data extraction (installed_generation_capacity) failed for NO_5: 
+2025-09-17 16:29:06,007 - ERROR - Data extraction (installed_generation_capacity) failed for PL: 
+2025-09-17 16:29:06,007 - ERROR - Data extraction (installed_generation_capacity) failed for PL_CZ: 
+2025-09-17 16:29:06,007 - ERROR - Data extraction (installed_generation_capacity) failed for PT: 
+2025-09-17 16:29:06,007 - ERROR - Data extraction (installed_generation_capacity) failed for RO: 
+2025-09-17 16:29:06,007 - ERROR - Data extraction (installed_generation_capacity) failed for RS: 
+2025-09-17 16:29:06,007 - ERROR - Data extraction (installed_generation_capacity) failed for RU: 
+2025-09-17 16:29:06,007 - ERROR - Data extraction (installed_generation_capacity) failed for RU_KGD: 
+2025-09-17 16:29:06,008 - ERROR - Data extraction (installed_generation_capacity) failed for SE: 
+2025-09-17 16:29:06,008 - ERROR - Data extraction (installed_generation_capacity) failed for SE_1: 
+2025-09-17 16:29:06,008 - ERROR - Data extraction (installed_generation_capacity) failed for SE_2: 
+2025-09-17 16:29:06,008 - ERROR - Data extraction (installed_generation_capacity) failed for SE_3: 
+2025-09-17 16:29:06,009 - ERROR - Data extraction (installed_generation_capacity) failed for SE_4: 
+2025-09-17 16:29:06,009 - ERROR - Data extraction (installed_generation_capacity) failed for SI: 
+2025-09-17 16:29:06,009 - ERROR - Data extraction (installed_generation_capacity) failed for SK: 
+2025-09-17 16:29:06,009 - ERROR - Data extraction (installed_generation_capacity) failed for TR: 
+2025-09-17 16:29:06,009 - ERROR - Data extraction (installed_generation_capacity) failed for UA: 
+2025-09-17 16:29:06,009 - ERROR - Data extraction (installed_generation_capacity) failed for UA_BEI: 
+2025-09-17 16:29:06,009 - ERROR - Data extraction (installed_generation_capacity) failed for UA_DOBTPP: 
+2025-09-17 16:29:06,010 - ERROR - Data extraction (installed_generation_capacity) failed for UA_IPS: 
+2025-09-17 16:29:06,010 - INFO - Script ended at 2025-09-17 13:29:06.010862+00:00
+2025-09-17 16:30:19,574 - INFO - Script started at 2025-09-17 13:30:19.573454+00:00
+2025-09-17 16:30:19,574 - ERROR - Data extraction (installed_generation_capacity) failed for BG: name 'start' is not defined
+2025-09-17 16:30:19,574 - INFO - Script ended at 2025-09-17 13:30:19.574453+00:00
+2025-09-17 16:30:33,416 - INFO - Script started at 2025-09-17 13:30:33.416595+00:00
+2025-09-17 16:30:34,722 - INFO - Data extraction (installed_generation_capacity) completed for country: BG
+2025-09-17 16:30:34,722 - INFO - Script ended at 2025-09-17 13:30:34.722904+00:00
+2025-09-17 16:34:26,783 - INFO - Script started at 2025-09-17 13:34:26.783317+00:00
+2025-09-17 16:34:26,784 - ERROR - Data extraction (installed_generation_capacity) failed for BG: 
+2025-09-17 16:34:26,784 - INFO - Script ended at 2025-09-17 13:34:26.784319+00:00
+2025-09-17 16:34:43,706 - INFO - Script started at 2025-09-17 13:34:43.706269+00:00
+2025-09-17 16:34:44,848 - INFO - Data extraction (installed_generation_capacity) completed for country: BG
+2025-09-17 16:34:44,848 - INFO - Script ended at 2025-09-17 13:34:44.848710+00:00
+2025-09-17 16:36:03,468 - INFO - Script started at 2025-09-17 13:36:03.468650+00:00
+2025-09-17 16:36:04,607 - ERROR - Data extraction (installed_generation_capacity) failed for BG: 'Index' object has no attribute 'tz_convert'
+2025-09-17 16:36:04,607 - INFO - Script ended at 2025-09-17 13:36:04.607934+00:00
+2025-09-17 16:37:11,408 - INFO - Script started at 2025-09-17 13:37:11.408016+00:00
+2025-09-17 16:37:12,218 - ERROR - Data extraction (installed_generation_capacity) failed for BG: 'Index' object has no attribute 'tz_convert'
+2025-09-17 16:37:12,218 - INFO - Script ended at 2025-09-17 13:37:12.218072+00:00
+2025-09-17 16:44:44,838 - INFO - Script started at 2025-09-17 13:44:44.838456+00:00
+2025-09-17 16:44:45,757 - ERROR - Data extraction (installed_generation_capacity) failed for BG: 'Index' object has no attribute 'tz_convert'
+2025-09-17 16:44:45,757 - INFO - Script ended at 2025-09-17 13:44:45.757517+00:00
+2025-09-17 16:46:30,978 - INFO - Script started at 2025-09-17 13:46:30.978459+00:00
+2025-09-17 16:46:32,374 - INFO - Data extraction (installed_generation_capacity) completed for country: BG
+2025-09-17 16:46:32,375 - INFO - Script ended at 2025-09-17 13:46:32.375335+00:00
+2025-09-17 16:50:53,994 - INFO - Script started at 2025-09-17 13:50:53.994538+00:00
+2025-09-17 16:52:17,326 - INFO - Script started at 2025-09-17 13:52:17.326315+00:00

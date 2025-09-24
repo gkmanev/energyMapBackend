@@ -1,0 +1,91 @@
+2023-07-19 15:10:44,350 - INFO - Script started at 2023-07-19 12:10:44.348911+00:00
+2023-07-19 15:10:55,109 - INFO - Data extraction (installed_generation_capacity) completed for country: AL
+2023-07-19 15:11:04,953 - INFO - Data extraction (installed_generation_capacity) completed for country: AT
+2023-07-19 15:11:15,797 - INFO - Data extraction (installed_generation_capacity) completed for country: BA
+2023-07-19 15:11:24,808 - INFO - Data extraction (installed_generation_capacity) completed for country: BE
+2023-07-19 15:11:33,347 - INFO - Data extraction (installed_generation_capacity) completed for country: BG
+2023-07-19 15:11:39,393 - ERROR - Data extraction (installed_generation_capacity) failed for BY: 
+2023-07-19 15:11:48,444 - INFO - Data extraction (installed_generation_capacity) completed for country: CH
+2023-07-19 15:11:48,546 - ERROR - Data extraction (installed_generation_capacity) failed for CWE: 400 Client Error: Bad Request for url: https://web-api.tp.entsoe.eu/api?documentType=A68&processType=A33&in_Domain=10YDOM-REGION-1V&securityToken=6276342c-e10c-4d88-8688-cb0a1cf163ca&periodStart=201501010000&periodEnd=201601010000
+2023-07-19 15:11:55,263 - INFO - Data extraction (installed_generation_capacity) completed for country: CY
+2023-07-19 15:12:02,881 - INFO - Data extraction (installed_generation_capacity) completed for country: CZ
+2023-07-19 15:12:18,725 - ERROR - Data extraction (installed_generation_capacity) failed for CZ_DE_SK: 
+2023-07-19 15:12:27,639 - INFO - Data extraction (installed_generation_capacity) completed for country: DE
+2023-07-19 15:12:35,103 - INFO - Data extraction (installed_generation_capacity) completed for country: DE_50HZ
+2023-07-19 15:12:43,673 - INFO - Data extraction (installed_generation_capacity) completed for country: DE_AMPRION
+2023-07-19 15:12:51,541 - INFO - Data extraction (installed_generation_capacity) completed for country: DE_AT_LU
+2023-07-19 15:12:58,604 - INFO - Data extraction (installed_generation_capacity) completed for country: DE_LU
+2023-07-19 15:13:07,640 - INFO - Data extraction (installed_generation_capacity) completed for country: DE_TENNET
+2023-07-19 15:13:16,224 - INFO - Data extraction (installed_generation_capacity) completed for country: DE_TRANSNET
+2023-07-19 15:13:23,845 - INFO - Data extraction (installed_generation_capacity) completed for country: DK
+2023-07-19 15:13:30,674 - INFO - Data extraction (installed_generation_capacity) completed for country: DK_1
+2023-07-19 15:13:38,138 - INFO - Data extraction (installed_generation_capacity) completed for country: DK_2
+2023-07-19 15:13:46,178 - INFO - Data extraction (installed_generation_capacity) completed for country: DK_CA
+2023-07-19 15:13:54,363 - INFO - Data extraction (installed_generation_capacity) completed for country: EE
+2023-07-19 15:14:01,676 - INFO - Data extraction (installed_generation_capacity) completed for country: ES
+2023-07-19 15:14:09,617 - INFO - Data extraction (installed_generation_capacity) completed for country: FI
+2023-07-19 15:14:17,408 - INFO - Data extraction (installed_generation_capacity) completed for country: FR
+2023-07-19 15:14:24,487 - INFO - Data extraction (installed_generation_capacity) completed for country: GB
+2023-07-19 15:14:35,159 - INFO - Data extraction (installed_generation_capacity) completed for country: GB_NIR
+2023-07-19 15:14:42,832 - INFO - Data extraction (installed_generation_capacity) completed for country: GR
+2023-07-19 15:14:49,518 - INFO - Data extraction (installed_generation_capacity) completed for country: HR
+2023-07-19 15:14:56,021 - INFO - Data extraction (installed_generation_capacity) completed for country: HU
+2023-07-19 15:15:07,558 - INFO - Data extraction (installed_generation_capacity) completed for country: IE
+2023-07-19 15:15:23,738 - INFO - Data extraction (installed_generation_capacity) completed for country: IE_SEM
+2023-07-19 15:15:30,208 - ERROR - Data extraction (installed_generation_capacity) failed for IS: 
+2023-07-19 15:15:44,090 - INFO - Data extraction (installed_generation_capacity) completed for country: IT
+2023-07-19 15:15:50,792 - ERROR - Data extraction (installed_generation_capacity) failed for IT_BRNN: 
+2023-07-19 15:15:57,085 - ERROR - Data extraction (installed_generation_capacity) failed for IT_CNOR: 
+2023-07-19 15:16:07,792 - ERROR - Data extraction (installed_generation_capacity) failed for IT_CSUD: 
+2023-07-19 15:16:15,674 - ERROR - Data extraction (installed_generation_capacity) failed for IT_FOGN: 
+2023-07-19 15:16:22,595 - ERROR - Data extraction (installed_generation_capacity) failed for IT_GR: 
+2023-07-19 15:16:22,693 - ERROR - Data extraction (installed_generation_capacity) failed for IT_MACRO_NORTH: 400 Client Error: Bad Request for url: https://web-api.tp.entsoe.eu/api?documentType=A68&processType=A33&in_Domain=10Y1001A1001A84D&securityToken=6276342c-e10c-4d88-8688-cb0a1cf163ca&periodStart=201501010000&periodEnd=201601010000
+2023-07-19 15:16:22,991 - ERROR - Data extraction (installed_generation_capacity) failed for IT_MACRO_SOUTH: 400 Client Error: Bad Request for url: https://web-api.tp.entsoe.eu/api?documentType=A68&processType=A33&in_Domain=10Y1001A1001A85B&securityToken=6276342c-e10c-4d88-8688-cb0a1cf163ca&periodStart=201501010000&periodEnd=201601010000
+2023-07-19 15:16:31,967 - ERROR - Data extraction (installed_generation_capacity) failed for IT_MALTA: 
+2023-07-19 15:16:39,706 - ERROR - Data extraction (installed_generation_capacity) failed for IT_NORD: 
+2023-07-19 15:16:44,106 - ERROR - Data extraction (installed_generation_capacity) failed for IT_NORD_AT: 
+2023-07-19 15:16:50,562 - ERROR - Data extraction (installed_generation_capacity) failed for IT_NORD_CH: 
+2023-07-19 15:17:03,154 - ERROR - Data extraction (installed_generation_capacity) failed for IT_NORD_FR: 
+2023-07-19 15:17:08,251 - ERROR - Data extraction (installed_generation_capacity) failed for IT_NORD_SI: 
+2023-07-19 15:17:13,436 - ERROR - Data extraction (installed_generation_capacity) failed for IT_PRGP: 
+2023-07-19 15:17:28,241 - ERROR - Data extraction (installed_generation_capacity) failed for IT_ROSN: 
+2023-07-19 15:17:34,095 - ERROR - Data extraction (installed_generation_capacity) failed for IT_SACO_AC: 
+2023-07-19 15:17:38,897 - ERROR - Data extraction (installed_generation_capacity) failed for IT_SACO_DC: 
+2023-07-19 15:17:44,775 - ERROR - Data extraction (installed_generation_capacity) failed for IT_SARD: 
+2023-07-19 15:17:52,348 - ERROR - Data extraction (installed_generation_capacity) failed for IT_SICI: 
+2023-07-19 15:18:08,627 - ERROR - Data extraction (installed_generation_capacity) failed for IT_SUD: 
+2023-07-19 15:18:17,814 - INFO - Data extraction (installed_generation_capacity) completed for country: LT
+2023-07-19 15:18:26,632 - INFO - Data extraction (installed_generation_capacity) completed for country: LU
+2023-07-19 15:18:33,650 - INFO - Data extraction (installed_generation_capacity) completed for country: LV
+2023-07-19 15:18:40,581 - ERROR - Data extraction (installed_generation_capacity) failed for MD: 
+2023-07-19 15:18:49,246 - INFO - Data extraction (installed_generation_capacity) completed for country: ME
+2023-07-19 15:18:55,590 - INFO - Data extraction (installed_generation_capacity) completed for country: MK
+2023-07-19 15:19:01,271 - ERROR - Data extraction (installed_generation_capacity) failed for MT: 
+2023-07-19 15:19:10,874 - INFO - Data extraction (installed_generation_capacity) completed for country: NL
+2023-07-19 15:19:21,063 - INFO - Data extraction (installed_generation_capacity) completed for country: NO
+2023-07-19 15:19:29,528 - INFO - Data extraction (installed_generation_capacity) completed for country: NO_1
+2023-07-19 15:19:37,162 - INFO - Data extraction (installed_generation_capacity) completed for country: NO_2
+2023-07-19 15:19:44,206 - INFO - Data extraction (installed_generation_capacity) completed for country: NO_3
+2023-07-19 15:19:50,701 - INFO - Data extraction (installed_generation_capacity) completed for country: NO_4
+2023-07-19 15:19:56,720 - INFO - Data extraction (installed_generation_capacity) completed for country: NO_5
+2023-07-19 15:20:05,788 - INFO - Data extraction (installed_generation_capacity) completed for country: PL
+2023-07-19 15:20:16,901 - ERROR - Data extraction (installed_generation_capacity) failed for PL_CZ: 
+2023-07-19 15:20:32,692 - INFO - Data extraction (installed_generation_capacity) completed for country: PT
+2023-07-19 15:20:43,582 - INFO - Data extraction (installed_generation_capacity) completed for country: RO
+2023-07-19 15:20:55,850 - INFO - Data extraction (installed_generation_capacity) completed for country: RS
+2023-07-19 15:21:04,766 - ERROR - Data extraction (installed_generation_capacity) failed for RU: 
+2023-07-19 15:21:12,033 - ERROR - Data extraction (installed_generation_capacity) failed for RU_KGD: 
+2023-07-19 15:21:26,097 - INFO - Data extraction (installed_generation_capacity) completed for country: SE
+2023-07-19 15:21:36,283 - ERROR - Data extraction (installed_generation_capacity) failed for SE_1: 
+2023-07-19 15:21:43,698 - ERROR - Data extraction (installed_generation_capacity) failed for SE_2: 
+2023-07-19 15:21:49,599 - ERROR - Data extraction (installed_generation_capacity) failed for SE_3: 
+2023-07-19 15:21:53,769 - ERROR - Data extraction (installed_generation_capacity) failed for SE_4: 
+2023-07-19 15:22:03,813 - INFO - Data extraction (installed_generation_capacity) completed for country: SI
+2023-07-19 15:22:13,486 - INFO - Data extraction (installed_generation_capacity) completed for country: SK
+2023-07-19 15:22:24,134 - ERROR - Data extraction (installed_generation_capacity) failed for TR: 
+2023-07-19 15:22:32,170 - INFO - Data extraction (installed_generation_capacity) completed for country: UA
+2023-07-19 15:22:37,322 - INFO - Data extraction (installed_generation_capacity) completed for country: UA_BEI
+2023-07-19 15:22:45,228 - ERROR - Data extraction (installed_generation_capacity) failed for UA_DOBTPP: 
+2023-07-19 15:22:53,479 - INFO - Data extraction (installed_generation_capacity) completed for country: UA_IPS
+failed_installed_generation_capacity=['BY', 'CWE', 'CZ_DE_SK', 'IS', 'IT_BRNN', 'IT_CNOR', 'IT_CSUD', 'IT_FOGN', 'IT_GR', 'IT_MACRO_NORTH', 'IT_MACRO_SOUTH', 'IT_MALTA', 'IT_NORD', 'IT_NORD_AT', 'IT_NORD_CH', 'IT_NORD_FR', 'IT_NORD_SI', 'IT_PRGP', 'IT_ROSN', 'IT_SACO_AC', 'IT_SACO_DC', 'IT_SARD', 'IT_SICI', 'IT_SUD', 'MD', 'MT', 'PL_CZ', 'RU', 'RU_KGD', 'SE_1', 'SE_2', 'SE_3', 'SE_4', 'TR', 'UA_DOBTPP']
+2023-07-19 15:22:53,480 - INFO - Script ended at 2023-07-19 12:22:53.480067+00:00

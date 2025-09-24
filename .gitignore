@@ -1,0 +1,20 @@
+# Python
+*.pyc
+*~
+__pycache__
+
+# Env
+.env
+entsoe_venv/
+venv/
+
+# Database
+db.sqlite3
+
+# Static folder at project root
+/static/
+
+/data/
+#dashboard/settings.py
+
+
