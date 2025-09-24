@@ -50,7 +50,8 @@ INSTALLED_APPS = [
     "corsheaders",
     'entsoe_api',
     'rest_framework',
-    'django_filters'
+    'django_filters',
+    'django_celery_beat'
 ]
 
 MIDDLEWARE = [
