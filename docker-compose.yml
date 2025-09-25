@@ -1,33 +1,11 @@
-# docker-compose.yml (no version key needed)
-
-x-django-env: &django_env
-  DEBUG: "1"
-  SECRET_KEY: foo
-  DJANGO_ALLOWED_HOSTS: "localhost 127.0.0.1 85.14.6.37 [::1]"
-  PYTHONUNBUFFERED: "1"
-  PYTHONPATH: "/app"
-  # DB (use these in settings.py)
-  DB_HOST: db
-  DB_PORT: "5432"
-  DB_NAME: postgres_latest
-  DB_USER: postgres
-  DB_PASSWORD: postgres
-  # Celery
-  CELERY_BROKER_URL: redis://redis:6379/0
-  CELERY_RESULT_BACKEND: redis://redis:6379/1
-
 services:
   web:
     build:
       context: .
       dockerfile: Dockerfile
-    working_dir: /app
     command: sh -c "python manage.py migrate && gunicorn data_api.wsgi:application --bind 0.0.0.0:8000"
-    ports:
-      - "8000:8000"
-    environment: *django_env
-    volumes:
-      - .:/app
+    ports: ["8000:8000"]
+    env_file: [.env]
     depends_on:
       db:
         condition: service_healthy
@@ -39,11 +17,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    working_dir: /app
     command: celery -A data_api worker -l info
-    environment: *django_env
-    volumes:
-      - .:/app
+    env_file: [.env]
     depends_on:
       db:
         condition: service_healthy
@@ -55,33 +30,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    # DO NOT set working_dir here; inherit image WORKDIR (/home/app/web)
     command: celery -A data_api beat -l info
-    environment: *django_env
-    # Optional: mount source somewhere else (not over /home/app/web)
-    volumes:
-      - .:/src
+    env_file: [.env]
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
     restart: always
-
-  # mqtt:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   working_dir: /app
-  #   # If this isn't a Django management command, change to: python -m entsoe_api.mqtt_runner
-  #   command: python manage.py mymqtt
-  #   environment: *django_env
-  #   volumes:
-  #     - .:/app
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
-  #   restart: always
 
   db:
     image: postgres:16-bookworm
@@ -106,6 +62,3 @@ services:
       timeout: 3s
       retries: 20
     restart: always
-
-volumes:
-  postgres_data:
