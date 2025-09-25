@@ -12,7 +12,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 from pathlib import Path
 import os
-
+from celery.schedules import crontab
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -50,8 +50,7 @@ INSTALLED_APPS = [
     "corsheaders",
     'entsoe_api',
     'rest_framework',
-    'django_filters',
-    'django_celery_beat'
+    'django_filters',   
 ]
 
 MIDDLEWARE = [
@@ -118,9 +117,9 @@ DATABASES = {
         "PASSWORD": os.getenv("DB_PASSWORD", "postgres"),
     }
 }
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
-ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "").split()
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER", "redis://redis:6379/0")
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_BACKEND", "redis://redis:6379/0")
+
 
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators

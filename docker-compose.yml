@@ -40,7 +40,7 @@ services:
       context: .
       dockerfile: Dockerfile
     working_dir: /app
-    command: sh -c "python manage.py migrate && celery -A data_api worker -l info"
+    command: celery -A dashboard worker -l info
     environment: *django_env
     volumes:
       - .:/app
@@ -56,7 +56,7 @@ services:
       context: .
       dockerfile: Dockerfile
     working_dir: /app
-    command: celery -A data_api beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    command: celery -A data_api beat -l info
     environment: *django_env
     volumes:
       - .:/app
