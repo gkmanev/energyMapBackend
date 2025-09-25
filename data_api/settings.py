@@ -35,6 +35,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:8080",
     "http://127.0.0.1:8000",
+    "http://85.14.6.37:16602"
 ]
 
 # Application definition
@@ -165,7 +166,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 ENTSOE_PRICE_COUNTRY_TO_EICS = {
     "DE": "10Y1001A1001A82H",  # DE-LU BZN
     "LU": "10Y1001A1001A82H",  # same price zone as DE
-
+    "IT": "10Y1001A1001A73I",
     "AT": "10YAT-APG------L",
     "BG": "10YCA-BULGARIA-R",
     "CZ": "10YCZ-CEPS-----N",
