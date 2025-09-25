@@ -55,11 +55,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    working_dir: /app
+    # DO NOT set working_dir here; inherit image WORKDIR (/home/app/web)
     command: celery -A data_api beat -l info
     environment: *django_env
+    # Optional: mount source somewhere else (not over /home/app/web)
     volumes:
-      - .:/app
+      - .:/src
     depends_on:
       db:
         condition: service_healthy
