@@ -40,7 +40,7 @@ services:
       context: .
       dockerfile: Dockerfile
     working_dir: /app
-    command: celery -A dashboard worker -l info
+    command: celery -A data_api worker -l info
     environment: *django_env
     volumes:
       - .:/app
