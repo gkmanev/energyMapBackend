@@ -23,6 +23,7 @@ def api_root(request, format=None):
         "capacity_latest": request.build_absolute_uri(reverse("capacity-latest")),
         "generation_yesterday": request.build_absolute_uri(reverse("generation-yesterday")),
         "prices_range": request.build_absolute_uri(reverse("prices-range")),
+        "price_bulk": request.build_absolute_url(reverse("country-prices-bulk-range"))
     })
 
 def _get_country_or_400(country_iso: str):
@@ -265,4 +266,114 @@ class CountryPricesRangeView(APIView):
             "start_utc": fmt(start_utc),
             "end_utc": fmt(end_utc),
             "items": items,
+        }, status=200)
+
+
+class CountryPricesBulkRangeView(APIView):
+    """
+    GET /api/prices/bulk-range/?countries=AT,DE,FR&contract=A01&start=YYYY-MM-DD&end=YYYY-MM-DD
+    GET /api/prices/bulk-range/?countries=AT,DE,FR&contract=A01&period=today
+    
+    Returns data for multiple countries in a single request.
+    Max 20 countries per request to prevent timeout.
+    """
+    def get(self, request):
+        countries_param = request.query_params.get("countries", "")
+        contract = (request.query_params.get("contract") or "A01").upper()
+        period = request.query_params.get("period")
+        start_s = request.query_params.get("start")
+        end_s = request.query_params.get("end")
+
+        # Parse and validate countries
+        if not countries_param:
+            return Response({"detail": "countries parameter is required"}, status=400)
+        
+        country_codes = [code.strip().upper() for code in countries_param.split(",") if code.strip()]
+        
+        if len(country_codes) > 20:  # Limit to prevent timeout
+            return Response({"detail": "Maximum 20 countries per request"}, status=400)
+        
+        if not country_codes:
+            return Response({"detail": "No valid country codes provided"}, status=400)
+
+        try:
+            start_utc, end_utc = _compute_window_utc(period, start_s, end_s)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=400)
+
+        if start_utc >= end_utc:
+            return Response({"detail": "start must be earlier than end."}, status=400)
+
+        # Validate contract type for period
+        if period and period.lower() == "dayahead" and contract != "A01":
+            return Response({"detail": "period=dayahead is only valid with contract=A01 (Day-ahead)."}, status=400)
+
+        # Get valid countries that exist in database
+        from .models import Country  # Adjust import path as needed
+        valid_countries = Country.objects.filter(pk__in=country_codes).values_list('pk', flat=True)
+        
+        if not valid_countries:
+            return Response({"detail": "No valid countries found"}, status=400)
+
+        # Optimized bulk query - single database hit for all countries
+        qs = (CountryPricePoint.objects
+              .filter(
+                  country_id__in=valid_countries,
+                  contract_type=contract,
+                  datetime_utc__gte=start_utc,
+                  datetime_utc__lt=end_utc
+              )
+              .select_related('country')  # Join country data to avoid N+1 queries
+              .order_by("country_id", "datetime_utc"))
+
+        # Group results by country
+        results = {}
+        
+        def _fmt_z(dt_utc):
+            dt_utc = dt_utc if dt_utc.tzinfo else dt_utc.replace(tzinfo=dt.timezone.utc)
+            return dt_utc.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Process results efficiently
+        for record in qs:
+            country_code = record.country.pk
+            
+            if country_code not in results:
+                results[country_code] = {
+                    "country": country_code,
+                    "contract_type": contract,
+                    "start_utc": start_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "end_utc": end_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "items": []
+                }
+            
+            results[country_code]["items"].append({
+                "datetime_utc": _fmt_z(record.datetime_utc),
+                "price": record.price,
+                "currency": record.currency,
+                "unit": record.unit,
+                "resolution": record.resolution,
+            })
+
+        # Add empty results for countries with no data
+        for country_code in valid_countries:
+            if country_code not in results:
+                results[country_code] = {
+                    "country": country_code,
+                    "contract_type": contract,
+                    "start_utc": start_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "end_utc": end_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "items": []
+                }
+
+        return Response({
+            "request_info": {
+                "countries_requested": country_codes,
+                "countries_found": list(valid_countries),
+                "contract_type": contract,
+                "start_utc": start_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "end_utc": end_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "total_countries": len(results),
+                "total_records": sum(len(data["items"]) for data in results.values())
+            },
+            "data": results
         }, status=200)

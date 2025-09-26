@@ -91,7 +91,11 @@ class CountryPricePoint(models.Model):
     class Meta:
         unique_together = (("country", "contract_type", "datetime_utc"),)
         indexes = [
+            # Existing index
             models.Index(fields=["country", "contract_type", "datetime_utc"]),
+            # Add these new indexes for bulk operations
+            models.Index(fields=["contract_type", "datetime_utc"]),  # For filtering across countries
+            models.Index(fields=["datetime_utc", "country"]),        # For time-based queries
         ]
 
     def __str__(self):
