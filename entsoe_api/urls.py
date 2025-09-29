@@ -1,6 +1,6 @@
 # entsoe_api/urls.py
 from django.urls import path
-from .views import CountryCapacityLatestView, CountryGenerationYesterdayView, api_root, CountryPricesRangeView, CountryPricesBulkRangeView
+from .views import CountryCapacityLatestView, CountryGenerationYesterdayView, api_root, CountryPricesRangeView, CountryPricesBulkRangeView, CountryGenerationRangeView
 
 urlpatterns = [
     path("api/", api_root, name="api-root"),
@@ -9,4 +9,5 @@ urlpatterns = [
     # PRICES (UTC-only, supports period=today|dayahead or start/end)
     path("api/prices/range/", CountryPricesRangeView.as_view(), name="prices-range"),
     path('api/prices/bulk-range/', CountryPricesBulkRangeView.as_view(), name='country-prices-bulk-range'),
+    path('api/generation/range/', CountryGenerationRangeView.as_view(), name='generation-range'),
 ]
