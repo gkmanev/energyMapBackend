@@ -126,7 +126,11 @@ DATABASES = {
 CELERY_BEAT_SCHEDULE = {
     "fetch_installed_capacity_daily": {
         "task": "entsoe_api.tasks.fetch_installed_capacity_task",
-        "schedule": crontab(hour=10, minute=42),
+        "schedule": crontab(hour=3, minute=0),
+    },
+    "fetch_prices_daily": {
+        "task": "entsoe_api.tasks.fetch_prices_daily_task",
+        "schedule": crontab(hour=11, minute=0),   # run daily at 03:05 Europe/Sofia
     },
 }
 
