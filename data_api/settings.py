@@ -120,6 +120,20 @@ DATABASES = {
         "PASSWORD": os.getenv("DB_PASSWORD", "postgres"),
     }
 }
+
+
+
+CELERY_BEAT_SCHEDULE = {
+    "fetch_installed_capacity_daily": {
+        "task": "entsoe_api.tasks.fetch_installed_capacity_task",
+        "schedule": crontab(hour=10, minute=30),
+    },
+}
+
+
+CELERY_TIMEZONE = "Europe/Sofia"
+CELERY_ENABLE_UTC = True  # keep True; Celery handles conversions
+
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER", "redis://redis:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_BACKEND", "redis://redis:6379/0")
 
