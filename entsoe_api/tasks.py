@@ -24,3 +24,18 @@ def fetch_prices_daily_task(self):
     # If your management command options are named --start/--end, call_command takes them as kwargs:
     call_command("fetch_prices", start=start_utc, end=end_utc)
 
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def fetch_generation_daily_task(self):
+    tz = ZoneInfo("Europe/Sofia")
+    now_local = datetime.now(tz)
+
+    start_local = datetime.combine(now_local.date() - timedelta(days=2), time(0, 0), tzinfo=tz)
+    end_local   = datetime.combine(now_local.date()) 
+
+    start_utc = start_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_utc   = end_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # If your management command options are named --start/--end, call_command takes them as kwargs:
+    call_command("fetch_generation", start=start_utc, end=end_utc)

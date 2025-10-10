@@ -38,7 +38,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:8080",
     "http://127.0.0.1:8000",
-    "http://85.14.6.37:16602"
+    "http://85.14.6.37:16602",
+    "http://159.89.103.242"
 ]
 
 # Application definition
@@ -130,7 +131,7 @@ CELERY_BEAT_SCHEDULE = {
     },
     "fetch_prices_daily": {
         "task": "entsoe_api.tasks.fetch_prices_daily_task",
-        "schedule": crontab(hour=11, minute=10),   # run daily at 03:05 Europe/Sofia
+        "schedule": crontab(hour=16, minute=10),   
     },
 }
 
