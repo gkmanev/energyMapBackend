@@ -131,7 +131,7 @@ CELERY_BEAT_SCHEDULE = {
     },
     "fetch_prices_daily": {
         "task": "entsoe_api.tasks.fetch_prices_daily_task",
-        "schedule": crontab(hour=14, minute=35),   
+        "schedule": crontab(hour=3, minute=3),   
     },
 }
 
