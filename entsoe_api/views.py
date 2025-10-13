@@ -23,7 +23,8 @@ def api_root(request, format=None):
         "capacity_latest": request.build_absolute_uri(reverse("capacity-latest")),
         "generation_yesterday": request.build_absolute_uri(reverse("generation-yesterday")),
         "prices_range": request.build_absolute_uri(reverse("prices-range")),
-        "price_bulk": request.build_absolute_url(reverse("country-prices-bulk-range"))
+        "price_bulk": request.build_absolute_url(reverse("country-prices-bulk-range")),
+        "generation_range": request.build_absolute_uri(reverse("generation_range")),
     })
 
 def _get_country_or_400(country_iso: str):
