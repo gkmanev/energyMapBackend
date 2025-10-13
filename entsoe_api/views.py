@@ -16,6 +16,8 @@ from .models import (
     CountryGenerationByType,
     CountryPricePoint
 )
+
+
 @api_view(["GET"])
 def api_root(request, format=None):
     return Response({
@@ -23,6 +25,7 @@ def api_root(request, format=None):
         "generation_yesterday": request.build_absolute_uri(reverse("generation-yesterday")),
         "prices_range": request.build_absolute_uri(reverse("prices-range")),
         "price_bulk": request.build_absolute_uri(reverse("country-prices-bulk-range")),
+        "generation_range": request.build_absolute_uri(reverse("generation-range")),
     })
 
 def _get_country_or_400(country_iso: str):
