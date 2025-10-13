@@ -16,14 +16,13 @@ from .models import (
     CountryGenerationByType,
     CountryPricePoint
 )
-
 @api_view(["GET"])
 def api_root(request, format=None):
     return Response({
         "capacity_latest": request.build_absolute_uri(reverse("capacity-latest")),
         "generation_yesterday": request.build_absolute_uri(reverse("generation-yesterday")),
         "prices_range": request.build_absolute_uri(reverse("prices-range")),
-        "price_bulk": request.build_absolute_url(reverse("country-prices-bulk-range"))
+        "price_bulk": request.build_absolute_uri(reverse("country-prices-bulk-range")),
     })
 
 def _get_country_or_400(country_iso: str):
@@ -382,66 +381,34 @@ class CountryPricesBulkRangeView(APIView):
 
 class CountryGenerationRangeView(APIView):
     """
-    GET /api/generation/range/?country=CZ[&psr=B16][&local=1]
-    GET /api/generation/range/?country=CZ&period=today[&psr=B16]
-    GET /api/generation/range/?country=CZ&period=yesterday[&psr=B16][&local=1] 
     GET /api/generation/range/?country=CZ&start=YYYY-MM-DDTHH:MM:SSZ&end=YYYY-MM-DDTHH:MM:SSZ[&psr=B16]
-
-    Response:
-    {
-      "country": "CZ",
-      "date_label": "yesterday (UTC)" | "today (UTC)" | "custom range",
-      "start_utc": "2025-09-17T00:00:00Z",
-      "end_utc": "2025-09-18T00:00:00Z",
-      "items": [
-        {"datetime_utc":"2025-09-17T00:00:00Z","psr_type":"B16","psr_name":"Solar","generation_mw":"123.000"},
-        ...
-      ]
-    }
+    end is exclusive: [start, end)
     """
     def get(self, request):
         country_q = request.query_params.get("country", "")
-        psr = request.query_params.get("psr")
-        use_local = request.query_params.get("local", "").lower() in ("1", "y", "yes", "true")
-        
-        # New flexible date parameters
-        period = request.query_params.get("period")
         start_s = request.query_params.get("start")
         end_s = request.query_params.get("end")
+        psr = request.query_params.get("psr")
+
+        if not country_q:
+            return Response({"detail": "country is required"}, status=400)
+        if not start_s or not end_s:
+            return Response({"detail": "start and end are required (ISO UTC)"}, status=400)
 
         try:
             country = _get_country_or_400(country_q)
         except ValueError as e:
-            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": str(e)}, status=400)
 
-        # Handle date range logic
         try:
-            if period or start_s or end_s:
-                # Use flexible date range logic
-                start_utc, end_utc = _compute_window_utc(period, start_s, end_s)
-                
-                # Generate appropriate label
-                if period:
-                    if period.lower() == "yesterday":
-                        label = "yesterday (UTC)" if not use_local else "yesterday (local)"
-                    elif period.lower() == "today":
-                        label = "today (UTC)" if not use_local else "today (local)"
-                    else:
-                        label = f"{period} (UTC)"
-                else:
-                    label = "custom range"
-            else:
-                # Default to yesterday for backward compatibility
-                start_utc, end_utc, label = _yesterday_window_utc(use_local=use_local)
-                
-        except ValueError as e:
-            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            start_utc = _parse_iso_utc_floor_hour(start_s)
+            end_utc = _parse_iso_utc_floor_hour(end_s)
+        except Exception:
+            return Response({"detail": "Bad datetime format. Use ISO, e.g. 2025-09-18T00:00:00Z"}, status=400)
 
-        # Validate date range
         if start_utc >= end_utc:
-            return Response({"detail": "start must be earlier than end."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "start must be earlier than end."}, status=400)
 
-        # Query the database
         qs = CountryGenerationByType.objects.filter(
             country=country,
             datetime_utc__gte=start_utc,
@@ -450,30 +417,25 @@ class CountryGenerationRangeView(APIView):
         if psr:
             qs = qs.filter(psr_type=psr)
 
-        # Order by time then psr
-        rows = qs.order_by("datetime_utc", "psr_type").values(
+        qs = qs.order_by("datetime_utc", "psr_type").values(
             "datetime_utc", "psr_type", "psr_name", "generation_mw"
         )
 
-        # Format datetimes as Z strings for the frontend
-        def _fmt_z(dt_utc):
-            dt_utc = dt_utc if dt_utc.tzinfo else dt_utc.replace(tzinfo=dt.timezone.utc)
-            return dt_utc.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        def _fmt_z(d):
+            d = d if d.tzinfo else d.replace(tzinfo=dt.timezone.utc)
+            return d.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        items = []
-        for r in rows:
-            items.append({
-                "datetime_utc": _fmt_z(r["datetime_utc"]),
-                "psr_type": r["psr_type"],
-                "psr_name": r["psr_name"] or r["psr_type"],
-                "generation_mw": r["generation_mw"],
-            })
+        items = [{
+            "datetime_utc": _fmt_z(r["datetime_utc"]),
+            "psr_type": r["psr_type"],
+            "psr_name": r["psr_name"] or r["psr_type"],
+            "generation_mw": r["generation_mw"],
+        } for r in qs]
 
-        payload = {
+        return Response({
             "country": country.pk,
-            "date_label": label,
             "start_utc": _fmt_z(start_utc),
             "end_utc": _fmt_z(end_utc),
             "items": items,
-        }
-        return Response(payload, status=status.HTTP_200_OK)
+        }, status=200)
+
