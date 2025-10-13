@@ -37,11 +37,7 @@ def _parse_iso_utc(s: str) -> dt.datetime:
     return d
 
 
-def _floor_to_step(d: dt.datetime, minutes: int = 15) -> dt.datetime:
-    """
-    Floor a datetime to the previous multiple of `minutes` (UTC), zeroing seconds/micros.
-    ENTSO-E periodStart/End must land on an MTU boundary (e.g., 00, 15, 30, 45).
-    """
+def _floor_to_step(d: dt.datetime, minutes: int = 60) -> dt.datetime:
     d = d.astimezone(dt.timezone.utc).replace(second=0, microsecond=0)
     return d - dt.timedelta(minutes=d.minute % minutes)
 
@@ -144,8 +140,7 @@ class Command(BaseCommand):
             if hours <= 0:
                 raise CommandError("--hours must be > 0.")
             now_utc = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
-            # Align end to the top of the hour (safe for 15-min MTU), start = end - hours
-            end = now_utc.replace(minute=0, second=0, microsecond=0)
+            end = now_utc.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)  # exclusive
             start = end - dt.timedelta(hours=hours)
 
         # --- fetch ---
