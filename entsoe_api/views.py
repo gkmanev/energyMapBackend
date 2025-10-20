@@ -478,3 +478,142 @@ class CountryGenerationRangeView(APIView):
             "items": items,
         }
         return Response(payload, status=status.HTTP_200_OK)
+
+
+class CountryGenerationBulkRangeView(APIView):
+    """
+    GET /api/generation/bulk-range/?countries=AT,DE,FR[&psr=B16][&local=1]
+    GET /api/generation/bulk-range/?countries=AT,DE,FR&period=today[&psr=B16][&local=1]
+    GET /api/generation/bulk-range/?countries=AT,DE,FR&start=YYYY-MM-DDTHH:MM:SSZ&end=YYYY-MM-DDTHH:MM:SSZ[&psr=B16][&local=1]
+
+    Returns generation by type for multiple countries in a single request.
+    Max 20 countries per request to prevent timeout.
+
+    Response:
+    {
+      "request_info": {...},
+      "data": {
+        "AT": {
+          "country": "AT",
+          "date_label": "today (UTC)" | "yesterday (UTC)" | "custom range",
+          "start_utc": "2025-09-17T00:00:00Z",
+          "end_utc":   "2025-09-18T00:00:00Z",
+          "items": [
+            {"datetime_utc":"2025-09-17T00:00:00Z","psr_type":"B16","psr_name":"Solar","generation_mw":"123.000"},
+            ...
+          ]
+        },
+        "DE": {...}
+      }
+    }
+    """
+    def get(self, request):
+        countries_param = request.query_params.get("countries", "")
+        psr = request.query_params.get("psr")
+        use_local = request.query_params.get("local", "").lower() in ("1", "y", "yes", "true")
+
+        # Flexible date inputs
+        period = request.query_params.get("period")
+        start_s = request.query_params.get("start")
+        end_s = request.query_params.get("end")
+
+        # Parse/validate countries
+        if not countries_param:
+            return Response({"detail": "countries parameter is required"}, status=400)
+
+        country_codes = [c.strip().upper() for c in countries_param.split(",") if c.strip()]
+        if len(country_codes) > 20:
+            return Response({"detail": "Maximum 20 countries per request"}, status=400)
+        if not country_codes:
+            return Response({"detail": "No valid country codes provided"}, status=400)
+
+        # Resolve time window
+        try:
+            if period or start_s or end_s:
+                start_utc, end_utc = _compute_window_utc(period, start_s, end_s)
+                if period:
+                    if period.lower() == "yesterday":
+                        label = "yesterday (local)" if use_local else "yesterday (UTC)"
+                    elif period.lower() == "today":
+                        label = "today (local)" if use_local else "today (UTC)"
+                    else:
+                        label = f"{period} ({'local' if use_local else 'UTC'})"
+                else:
+                    label = "custom range"
+            else:
+                # Back-compat default
+                start_utc, end_utc, label = _yesterday_window_utc(use_local=use_local)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=400)
+
+        if start_utc >= end_utc:
+            return Response({"detail": "start must be earlier than end."}, status=400)
+
+        # Validate countries against DB
+        from .models import Country, CountryGenerationByType  # adjust if needed
+        valid_countries = list(
+            Country.objects.filter(pk__in=country_codes).values_list("pk", flat=True)
+        )
+        if not valid_countries:
+            return Response({"detail": "No valid countries found"}, status=400)
+
+        # One optimized query
+        qs = (
+            CountryGenerationByType.objects
+            .filter(
+                country_id__in=valid_countries,
+                datetime_utc__gte=start_utc,
+                datetime_utc__lt=end_utc,
+            )
+            .select_related("country")
+        )
+        if psr:
+            qs = qs.filter(psr_type=psr)
+
+        qs = qs.order_by("country_id", "datetime_utc", "psr_type").values(
+            "country_id", "datetime_utc", "psr_type", "psr_name", "generation_mw"
+        )
+
+        def _fmt_z(dt_utc):
+            dt_utc = dt_utc if dt_utc.tzinfo else dt_utc.replace(tzinfo=dt.timezone.utc)
+            return dt_utc.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Build result map
+        results = {
+            code: {
+                "country": code,
+                "date_label": label,
+                "start_utc": _fmt_z(start_utc),
+                "end_utc": _fmt_z(end_utc),
+                "items": [],
+            }
+            for code in valid_countries
+        }
+
+        total_records = 0
+        for r in qs:
+            payload_item = {
+                "datetime_utc": _fmt_z(r["datetime_utc"]),
+                "psr_type": r["psr_type"],
+                "psr_name": r["psr_name"] or r["psr_type"],
+                "generation_mw": r["generation_mw"],
+            }
+            results[r["country_id"]]["items"].append(payload_item)
+            total_records += 1
+
+        return Response(
+            {
+                "request_info": {
+                    "countries_requested": country_codes,
+                    "countries_found": valid_countries,
+                    "psr": psr,
+                    "start_utc": _fmt_z(start_utc),
+                    "end_utc": _fmt_z(end_utc),
+                    "date_label": label,
+                    "total_countries": len(results),
+                    "total_records": total_records,
+                },
+                "data": results,
+            },
+            status=200,
+        )
