@@ -40,8 +40,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8000",
     "http://85.14.6.37:16602",
     "http://159.89.103.242",
-    "http://visualize.energy/",
-    "https://visualize.energy/"
+    "http://visualize.energy",
+    "https://visualize.energy"
 ]
 
 # Application definition
