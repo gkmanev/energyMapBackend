@@ -1,8 +1,15 @@
 # yourapp/ingest_country.py
-from typing import List
+from __future__ import annotations
+from typing import List, Dict, Optional
 from django.db import transaction
-from .models import Country, CountryCapacitySnapshot, CountryGenerationByType, CountryPricePoint
+from .models import Country, CountryCapacitySnapshot, CountryGenerationByType, CountryPricePoint, PhysicalFlow
+from functools import lru_cache
+from typing import Dict, Iterable, Optional, Union
+
 from datetime import timezone
+from django.conf import settings
+
+
 import pandas as pd
 def _get_or_create_country(iso: str) -> Country:
     obj, _ = Country.objects.get_or_create(pk=iso)
@@ -166,3 +173,152 @@ def save_country_prices_df(df: pd.DataFrame) -> int:
         CountryPricePoint.objects.bulk_update(to_update, ["price","currency","unit","resolution"])
 
     return len(to_create) + len(to_update)
+
+
+
+
+def _normalize_eic(x: Optional[str]) -> Optional[str]:
+    if not x:
+        return None
+    s = str(x).strip()
+    return s if s else None
+
+def _iter_eics(val: Union[str, Iterable[str]]) -> Iterable[str]:
+    """
+    Yield normalized EIC strings from either a single string or an iterable of strings.
+    Skips falsy/empty values.
+    """
+    if isinstance(val, (list, tuple, set)):
+        for item in val:
+            s = _normalize_eic(item)
+            if s:
+                yield s
+    else:
+        s = _normalize_eic(val)
+        if s:
+            yield s
+
+@lru_cache(maxsize=1)
+def _eic_to_country_iso_map() -> Dict[str, str]:
+    """
+    Build mapping: EIC domain -> ISO2 country code.
+
+    Supports:
+      - settings.ENTSOE_COUNTRY_TO_EICS: { "BG": "10Y...", "DE": ["10Y..", "10Y.."] }
+      - settings.ENTSOE_PRICE_COUNTRY_TO_EICS: legacy key with same shape
+      - settings.ENTSOE_DOMAIN_EIC_TO_COUNTRY: direct { "10Y...": "BG" } overrides
+    """
+    mapping: Dict[str, str] = {}
+
+    # Prefer ENTSOE_COUNTRY_TO_EICS, else fallback to ENTSOE_PRICE_COUNTRY_TO_EICS
+    country_to_eics = getattr(settings, "ENTSOE_COUNTRY_TO_EICS", None)
+    if not isinstance(country_to_eics, dict) or not country_to_eics:
+        country_to_eics = getattr(settings, "ENTSOE_PRICE_COUNTRY_TO_EICS", {}) or {}
+
+    # Reverse map: (may be str or list[str])
+    for iso, eics in country_to_eics.items():
+        if not iso:
+            continue
+        iso2 = str(iso).upper().strip()
+        for eic in _iter_eics(eics):
+            mapping[eic] = iso2
+
+    # Optional explicit overrides/extensions
+    explicit = getattr(settings, "ENTSOE_DOMAIN_EIC_TO_COUNTRY", None)
+    if isinstance(explicit, dict):
+        for eic, iso in explicit.items():
+            seic = _normalize_eic(eic)
+            siso = str(iso).upper().strip() if iso else None
+            if seic and siso:
+                mapping[seic] = siso
+
+    return mapping
+
+@lru_cache(maxsize=None)
+def _country_by_iso(iso: str) -> Optional[Country]:
+    try:
+        return Country.objects.get(pk=str(iso).upper())
+    except Country.DoesNotExist:
+        return None
+
+def _map_eic_to_country(eic: Optional[str]) -> Optional[Country]:
+    if not eic:
+        return None
+    iso = _eic_to_country_iso_map().get(eic)
+    if not iso:
+        return None
+    return _country_by_iso(iso)
+
+def save_flows_df(df: pd.DataFrame) -> int:
+    """
+    Save parsed A11 flows DataFrame into PhysicalFlow table.
+
+    Expected columns after normalization:
+      - 'datetime_utc' (tz-aware or naive UTC timestamp)
+      - 'out_domain_eic' (str)
+      - 'in_domain_eic'  (str)
+      - 'quantity_mw' or 'quantity_MW' (numeric)
+      - optional 'resolution' (str)
+
+    Behavior:
+      - Keeps original EIC pair (for uniqueness).
+      - Also populates country_from / country_to using EIC->Country mapping.
+      - Upserts per (datetime_utc, out_domain_eic, in_domain_eic).
+    """
+    if df is None or df.empty:
+        return 0
+
+    df = df.copy()
+
+    # Normalize quantity column name
+    if "quantity_mw" not in df.columns and "quantity_MW" in df.columns:
+        df = df.rename(columns={"quantity_MW": "quantity_mw"})
+
+    required = {"datetime_utc", "out_domain_eic", "in_domain_eic", "quantity_mw"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"save_flows_df missing columns: {missing}")
+
+    # Normalize datetimes (force UTC, pandas handles tz-naive as UTC if utc=True)
+    df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True)
+
+    # Coerce quantity to float (preserve None where appropriate)
+    def _to_float(x):
+        if pd.isna(x):
+            return None
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return None
+
+    df["quantity_mw"] = df["quantity_mw"].map(_to_float)
+
+    # Iterate as records and upsert
+    written = 0
+    with transaction.atomic():
+        for rec in df.to_dict(orient="records"):
+            dt = pd.to_datetime(rec["datetime_utc"], utc=True).to_pydatetime()
+            out_eic = rec.get("out_domain_eic")
+            in_eic = rec.get("in_domain_eic")
+            qty = rec.get("quantity_mw")
+            res = rec.get("resolution")
+
+            # Map to countries (best-effort)
+            c_from = _map_eic_to_country(out_eic)
+            c_to = _map_eic_to_country(in_eic)
+
+            # Upsert by original EIC pair uniqueness
+            _, _created = PhysicalFlow.objects.update_or_create(
+                datetime_utc=dt,
+                out_domain_eic=out_eic,
+                in_domain_eic=in_eic,
+                defaults={
+                    "quantity_mw": qty,
+                    "resolution": res,
+                    "country_from": c_from,
+                    "country_to": c_to,
+                },
+            )
+            written += 1
+
+    return written

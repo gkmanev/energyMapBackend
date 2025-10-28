@@ -100,3 +100,58 @@ class CountryPricePoint(models.Model):
 
     def __str__(self):
         return f"{self.country_id} {self.contract_type} {self.datetime_utc:%Y-%m-%d %H:%MZ}"
+    
+
+class PhysicalFlow(models.Model):
+    """
+    A11 Cross-Border Physical Flow (per direction).
+    quantity_mw: MW at the timestamp.
+
+    - Stores BOTH country-level FKs (for querying) and the original EIC pair
+      (for provenance + uniqueness across multi-zone countries).
+    """
+    datetime_utc = models.DateTimeField(db_index=True)
+
+    # NEW: country-level fields for querying & joins
+    country_from = models.ForeignKey(
+        "entsoe_api.Country",
+        on_delete=models.PROTECT,
+        related_name="flows_out",
+        null=True,
+        blank=True,
+        db_index=True,
+    )
+    country_to = models.ForeignKey(
+        "entsoe_api.Country",
+        on_delete=models.PROTECT,
+        related_name="flows_in",
+        null=True,
+        blank=True,
+        db_index=True,
+    )
+
+    # Keep original EICs from the source response (A11)
+    out_domain_eic = models.CharField(max_length=32, db_index=True, blank=True, null=True)
+    in_domain_eic  = models.CharField(max_length=32, db_index=True, blank=True, null=True)
+
+    resolution = models.CharField(max_length=16, blank=True, null=True)  # e.g. PT15M, PT60M
+    quantity_mw = models.FloatField()
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        # Preserve uniqueness at the *EIC pair* level (original semantics)
+        unique_together = ("datetime_utc", "out_domain_eic", "in_domain_eic")
+        indexes = [
+            # Fast country range queries (what your views need)
+            models.Index(fields=["country_from", "country_to", "datetime_utc"]),
+            models.Index(fields=["country_from", "datetime_utc"]),
+            models.Index(fields=["country_to", "datetime_utc"]),
+            # Keep existing EIC index patterns
+            models.Index(fields=["out_domain_eic", "in_domain_eic", "datetime_utc"]),
+        ]
+
+    def __str__(self):
+        cf = self.country_from_id or self.out_domain_eic or "?"
+        ct = self.country_to_id   or self.in_domain_eic  or "?"
+        return f"{self.datetime_utc} {cf}->{ct}: {self.quantity_mw} MW"

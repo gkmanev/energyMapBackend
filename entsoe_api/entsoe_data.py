@@ -906,3 +906,296 @@ class EntsoePrices:
             if c in df2.columns:
                 df2[c] = pd.to_datetime(df2[c], utc=True, errors="ignore").dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         return df2.to_dict(orient="records")
+    
+
+
+# ---------- PHYSICAL FLOWS (A11) ----------
+
+class EntsoePhysicalFlows:
+    """
+    ENTSO-E Cross-Border Physical Flows (A11), per direction.
+
+    Public methods:
+      - get_range(out_domain_eic, in_domain_eic, start, end)
+      - query_pairs(api_key, pairs, start, end)
+
+    Returns tidy pandas DataFrames with columns:
+      ['datetime_utc','out_domain_eic','in_domain_eic','quantity_MW','resolution']
+    """
+
+    def __init__(self, api_key: str, session: Optional[requests.Session] = None):
+        self.api_key = api_key
+        self.session = session or requests.Session()
+
+    # ---------- helpers ----------
+
+    @staticmethod
+    def _to_utc_compact(d: dt.datetime) -> str:
+        """Format datetime as yyyyMMddHHmm UTC for ENTSO-E."""
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=dt.timezone.utc)
+        d = d.astimezone(dt.timezone.utc)
+        return d.strftime("%Y%m%d%H%M")
+
+    @staticmethod
+    def _ensure_utc(d: dt.datetime) -> dt.datetime:
+        if d.tzinfo is None:
+            return d.replace(tzinfo=dt.timezone.utc)
+        return d.astimezone(dt.timezone.utc)
+
+    def _request_with_retries(self, params: dict, max_retries: int = 5, timeout: int = 45) -> str:
+        """GET with backoff on 429/5xx; raise on other errors."""
+        backoff = 1.0
+        for _ in range(max_retries):
+            r = self.session.get(BASE_URL, params=params, timeout=timeout)
+            if r.status_code == 200 and r.text.strip():
+                return r.text
+            if r.status_code in (429, 500, 502, 503, 504):
+                retry_after = r.headers.get("Retry-After")
+                try:
+                    sleep_s = float(retry_after) if retry_after else backoff
+                except ValueError:
+                    sleep_s = backoff
+                import time as _t
+                _t.sleep(sleep_s)
+                backoff = min(backoff * 2, 30)
+                continue
+            # Try to surface XML errors, then raise
+            try:
+                ET.fromstring(r.text)
+            except Exception:
+                pass
+            r.raise_for_status()
+        raise TimeoutError("ENTSO-E request failed after retries")
+
+    @staticmethod
+    def _iso8601_duration_to_minutes(duration: str) -> int:
+        """Parse e.g. 'PT15M', 'PT60M' -> minutes."""
+        if not duration or not duration.startswith("P"):
+            return 0
+        days = hours = minutes = 0
+        date_part, time_part = duration, ""
+        if "T" in duration:
+            date_part, time_part = duration.split("T", 1)
+        if "D" in date_part:
+            d = date_part.replace("P", "").split("D")[0]
+            try:
+                days = int(d or 0)
+            except Exception:
+                days = 0
+        if "H" in time_part:
+            h = time_part.split("H")[0]
+            try:
+                hours = int(h or 0)
+            except Exception:
+                hours = 0
+            time_part = time_part.split("H", 1)[1] if "H" in time_part else ""
+        if "M" in time_part:
+            m = time_part.split("M")[0]
+            try:
+                minutes = int(m or 0)
+            except Exception:
+                minutes = 0
+        return days * 1440 + hours * 60 + minutes
+
+    # ---------- parsing ----------
+
+    @staticmethod
+    def _parse_a11(xml_text: str, out_eic_fallback: str, in_eic_fallback: str) -> List[Dict]:
+        """
+        Parse A11 (Cross-Border Physical Flow) XML to list-of-dicts.
+
+        Output rows:
+          - datetime_utc (naive UTC datetime; consistent with your A75 parser)
+          - out_domain_eic
+          - in_domain_eic
+          - quantity_MW (float)
+          - resolution (ISO 8601, e.g. 'PT15M')
+        """
+        # Detect/propagate whatever namespace the doc uses
+        if hasattr(xml_text, "text"):
+            xml_text = xml_text.text
+        if isinstance(xml_text, bytes):
+            xml_text = xml_text.decode("utf-8", errors="replace")
+
+        root = ET.fromstring(xml_text)
+        ns_uri = root.tag.split("}")[0].strip("{") if "}" in root.tag else ""
+        ns = {"ns": ns_uri} if ns_uri else {}
+
+        # Some ENTSO-E errors arrive inside 200/XML as <Reason>
+        # Try both publication and generic ns forms.
+        reasons = []
+        if ns:
+            reasons.extend(root.findall(".//ns:Reason", ns))
+        else:
+            reasons.extend(root.findall(".//Reason"))
+        for reason in reasons:
+            code = ""
+            text = ""
+            if ns:
+                code_el = reason.find("ns:code", ns) or reason.find("ns:Code", ns)
+                text_el = reason.find("ns:text", ns) or reason.find("ns:Text", ns)
+            else:
+                code_el = reason.find("code") or reason.find("Code")
+                text_el = reason.find("text") or reason.find("Text")
+            if code_el is not None:
+                code = (code_el.text or "").strip()
+            if text_el is not None:
+                text = (text_el.text or "").strip()
+            if code or text:
+                raise RuntimeError(f"ENTSO-E API error: {code} {text}".strip())
+
+        # Find TimeSeries blocks
+        series = root.findall(".//ns:TimeSeries", ns) if ns else root.findall(".//TimeSeries")
+        records: List[Dict] = []
+
+        for s in series:
+            # out/in domains can appear under the series
+            if ns:
+                out_el = s.find(".//ns:out_Domain/ns:mRID", ns) or s.find(".//ns:outBiddingZone_Domain/ns:mRID", ns)
+                in_el  = s.find(".//ns:in_Domain/ns:mRID", ns)  or s.find(".//ns:inBiddingZone_Domain/ns:mRID", ns)
+            else:
+                out_el = s.find(".//out_Domain/mRID") or s.find(".//outBiddingZone_Domain/mRID")
+                in_el  = s.find(".//in_Domain/mRID")  or s.find(".//inBiddingZone_Domain/mRID")
+
+            out_eic = (out_el.text.strip() if out_el is not None and out_el.text else out_eic_fallback)
+            in_eic  = (in_el.text.strip()  if in_el  is not None and in_el.text  else in_eic_fallback)
+
+            # Periods contain start + resolution + Points
+            periods = s.findall(".//ns:Period", ns) if ns else s.findall(".//Period")
+            for period in periods:
+                ti = period.find("ns:timeInterval", ns) if ns else period.find("timeInterval")
+                start_el = ti.find("ns:start", ns) if (ti is not None and ns) else (ti.find("start") if ti is not None else None)
+
+                # Resolution can be on Period or TimeSeries
+                res_el = (period.find("ns:resolution", ns) if ns else period.find("resolution")) or \
+                         (s.find("ns:resolution", ns) if ns else s.find("resolution"))
+                res_iso = (res_el.text.strip() if res_el is not None and res_el.text else "PT60M")
+                step_min = EntsoePhysicalFlows._iso8601_duration_to_minutes(res_iso) or 60
+
+                if not (start_el is not None and start_el.text):
+                    continue
+                # Parse e.g. "2023-08-23T22:00Z"
+                try:
+                    base = dt.datetime.strptime(start_el.text.replace("Z", "+0000"), "%Y-%m-%dT%H:%M%z")
+                except ValueError:
+                    base = dt.datetime.fromisoformat(start_el.text.replace("Z", "+00:00"))
+                base = base.astimezone(dt.timezone.utc)
+
+                # Points -> position + quantity
+                pts = period.findall(".//ns:Point", ns) if ns else period.findall(".//Point")
+                for p in pts:
+                    pos_el = p.find("ns:position", ns) if ns else p.find("position")
+                    q_el   = p.find("ns:quantity", ns) if ns else p.find("quantity")
+                    if q_el is None or q_el.text is None:
+                        continue
+                    try:
+                        pos = int(pos_el.text) if (pos_el is not None and pos_el.text) else 1
+                    except Exception:
+                        pos = 1
+                    try:
+                        qty = float(q_el.text)
+                    except Exception:
+                        continue
+
+                    ts = base + dt.timedelta(minutes=(pos - 1) * step_min)
+                    # Match your A75 convention: store UTC but naive; convert to ISO later via to_records
+                    records.append({
+                        "datetime_utc": ts.replace(tzinfo=dt.timezone.utc).astimezone(dt.timezone.utc).replace(tzinfo=None),
+                        "out_domain_eic": out_eic,
+                        "in_domain_eic": in_eic,
+                        "quantity_mw": qty,
+                        "resolution": res_iso,
+                    })
+
+        records.sort(key=lambda r: (r["datetime_utc"], r["out_domain_eic"], r["in_domain_eic"]))
+        return records
+
+    # ---------- public API ----------
+
+    def get_range(
+        self,
+        out_domain_eic: str,
+        in_domain_eic: str,
+        start: dt.datetime,
+        end: dt.datetime,
+    ) -> pd.DataFrame:
+        """
+        Fetch A11 physical flows in [start, end) UTC for a single (out→in) pair.
+        Returns columns: ['datetime_utc','out_domain_eic','in_domain_eic','quantity_MW','resolution']
+        """
+        if start >= end:
+            return pd.DataFrame(columns=["datetime_utc","out_domain_eic","in_domain_eic","quantity_MW","resolution"])
+
+        start_utc = self._ensure_utc(start)
+        end_utc = self._ensure_utc(end)
+
+        params = {
+            "documentType": "A11",
+            "out_Domain": out_domain_eic,
+            "in_Domain": in_domain_eic,
+            "periodStart": self._to_utc_compact(start_utc),
+            "periodEnd": self._to_utc_compact(end_utc),
+            "securityToken": self.api_key,
+        }
+        xml_text = self._request_with_retries(params)
+        rows = self._parse_a11(xml_text, out_domain_eic, in_domain_eic)
+        if not rows:
+            return pd.DataFrame(columns=["datetime_utc","out_domain_eic","in_domain_eic","quantity_MW","resolution"])
+
+        df = pd.DataFrame.from_records(rows)
+        # Deduplicate defensively & clip to window (end exclusive)
+        df = (df.drop_duplicates(subset=["datetime_utc","out_domain_eic","in_domain_eic"])
+                .sort_values(["datetime_utc","out_domain_eic","in_domain_eic"])
+                .reset_index(drop=True))
+        df = df[(df["datetime_utc"] >= start_utc.replace(tzinfo=None)) &
+                (df["datetime_utc"] <  end_utc.replace(tzinfo=None))]
+        return df
+
+    @classmethod
+    def query_pairs(
+        cls,
+        api_key: str,
+        pairs: List[Tuple[str, str]],
+        start: dt.datetime,
+        end: dt.datetime,
+        skip_errors: bool = True,
+    ) -> pd.DataFrame:
+        """
+        Fetch A11 flows for multiple (out→in) EIC pairs.
+        Returns: ['datetime_utc','out_domain_eic','in_domain_eic','quantity_MW','resolution']
+        """
+        client = cls(api_key)
+        frames: List[pd.DataFrame] = []
+        for out_eic, in_eic in pairs:
+            try:
+                df = client.get_range(out_eic, in_eic, start, end)
+                if not df.empty:
+                    frames.append(df)
+            except Exception as e:
+                if skip_errors:
+                    print(f"[entsoe] A11 skip {out_eic}->{in_eic}: {e}")
+                    continue
+                raise
+        if not frames:
+            return pd.DataFrame(columns=["datetime_utc","out_domain_eic","in_domain_eic","quantity_MW","resolution"])
+        full = pd.concat(frames, ignore_index=True, sort=False)
+        return (full.sort_values(["datetime_utc","out_domain_eic","in_domain_eic"])
+                    .reset_index(drop=True))
+
+    # ---------- small utility for DRF ----------
+
+    @staticmethod
+    def to_records(df: pd.DataFrame, datetime_cols: Optional[List[str]] = None) -> List[Dict]:
+        """
+        Convert a DataFrame to list-of-dicts, ISO-formatting datetime columns for JSON responses.
+        """
+        if df.empty:
+            return []
+        if datetime_cols is None:
+            datetime_cols = [c for c in df.columns if "time" in c or "date" in c]
+        df2 = df.copy()
+        for c in datetime_cols:
+            if c in df2.columns:
+                df2[c] = pd.to_datetime(df2[c], utc=True, errors="ignore").dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return df2.to_dict(orient="records")

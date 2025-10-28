@@ -1,6 +1,6 @@
 # yourapp/serializers.py
 from rest_framework import serializers
-from .models import Country, CountryCapacitySnapshot, CountryGenerationByType, CountryPricePoint
+from .models import Country, CountryCapacitySnapshot, CountryGenerationByType, CountryPricePoint, PhysicalFlow
 
 class CountrySerializer(serializers.ModelSerializer):
     class Meta:
@@ -33,4 +33,16 @@ class CountryPricePointSerializer(serializers.ModelSerializer):
             "currency",
             "unit",
             "resolution",
+        ]
+
+class PhysicalFlowSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PhysicalFlow
+        fields = [
+            "datetime_utc",
+            "out_domain_eic",
+            "in_domain_eic",
+            "resolution",
+            "quantity_mw",
+            "created_at",
         ]
