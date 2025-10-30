@@ -2,6 +2,8 @@ from celery import shared_task
 from django.core.management import call_command
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo  # Python 3.12+
+import logging
+logging.basicConfig(level=logging.INFO)
 
 
 @shared_task
@@ -20,7 +22,7 @@ def fetch_prices_daily_task(self):
 
     start_utc = start_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     end_utc   = end_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
+    logging.info(end_utc)
     # If your management command options are named --start/--end, call_command takes them as kwargs:
     call_command("fetch_prices", start=start_utc, end=end_utc)
 
