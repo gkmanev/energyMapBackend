@@ -32,7 +32,7 @@ if not SECRET_KEY:
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DEBUG", "0").lower() in ("1", "true")  # provided by env_file [web:62][web:149]
 
-ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1 localhost api.visualize.energy visualize.energy 192.168.1.49 192.168.1.35").split()  
+ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1 localhost api.visualize.energy visualize.energy 192.168.1.49 192.168.1.35 85.14.6.37").split()  
 
 CORS_ALLOWED_ORIGINS = [   
     "http://localhost:5173",
@@ -139,7 +139,7 @@ CELERY_BEAT_SCHEDULE = {
     },
     "fetch_prices_daily": {
         "task": "entsoe_api.tasks.fetch_prices_daily_task",
-        "schedule": crontab(hour=10, minute=41),   
+        "schedule": crontab(hour=10, minute=54),   
     },
 }
 
