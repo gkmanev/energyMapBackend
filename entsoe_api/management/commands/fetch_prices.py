@@ -11,7 +11,9 @@ from django.core.management.base import BaseCommand, CommandError
 
 from entsoe_api.entsoe_data import EntsoePrices
 from entsoe_api.helper import save_country_prices_df
+from dotenv import load_dotenv
 
+load_dotenv()
 
 def _utc_floor_hour(d: dt.datetime) -> dt.datetime:
     d = d if d.tzinfo else d.replace(tzinfo=dt.timezone.utc)

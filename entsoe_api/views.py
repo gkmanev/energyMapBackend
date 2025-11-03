@@ -142,8 +142,8 @@ def _compute_window_utc(
 
 
 # ── PhysicalFlow field mapping (matches your model) ─────────────────────────────
-PHYSICAL_FLOW_SRC_FIELD = "out_domain_eic"     # sending domain
-PHYSICAL_FLOW_DST_FIELD = "in_domain_eic"      # receiving domain
+PHYSICAL_FLOW_SRC_FIELD = "source_country"     # sending domain
+PHYSICAL_FLOW_DST_FIELD = "target_country"      # receiving domain
 PHYSICAL_FLOW_TS_FIELD  = "datetime_utc"       # timestamp of the flow
 PHYSICAL_FLOW_MW_FIELD  = "quantity_mw"        # MW value
 
