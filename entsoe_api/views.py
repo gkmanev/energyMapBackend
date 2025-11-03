@@ -142,8 +142,8 @@ def _compute_window_utc(
 
 
 # ── PhysicalFlow field mapping (matches your model) ─────────────────────────────
-PHYSICAL_FLOW_SRC_FIELD = "source_country"     # sending domain
-PHYSICAL_FLOW_DST_FIELD = "target_country"      # receiving domain
+PHYSICAL_FLOW_SRC_FIELD = "country_from_id"     # sending domain
+PHYSICAL_FLOW_DST_FIELD = "country_to_id"      # receiving domain
 PHYSICAL_FLOW_TS_FIELD  = "datetime_utc"       # timestamp of the flow
 PHYSICAL_FLOW_MW_FIELD  = "quantity_mw"        # MW value
 
@@ -585,14 +585,14 @@ class PhysicalFlowsRangeView(APIView):
                 _get_country_or_400(src_iso)
             except ValueError as e:
                 return Response({"detail": str(e)}, status=400)
-            qs = qs.filter(**{src_field: src_iso})
+            qs = qs.filter(country_from_id=src_iso)
 
         if dst_iso:
             try:
                 _get_country_or_400(dst_iso)
             except ValueError as e:
                 return Response({"detail": str(e)}, status=400)
-            qs = qs.filter(**{dst_field: dst_iso})
+            qs = qs.filter(country_to_id=dst_iso)
 
         if multi:
             codes = _split_codes(multi)
