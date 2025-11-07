@@ -575,10 +575,23 @@ class PhysicalFlowsRangeView(APIView):
 
         src_field, dst_field, ts_field = _flow_field_names()
 
-        qs = PhysicalFlow.objects.filter(**{
-            f"{ts_field}__gte": start_utc,
-            f"{ts_field}__lt":  end_utc,
-        })
+        explicit_range = bool(start_s or end_s) and not period
+
+        time_filters = {f"{ts_field}__gte": start_utc}
+        if explicit_range:
+            # When the caller provides an explicit start/end window we treat the
+            # upper bound as inclusive.  The ENTSO-E physical flow payloads are
+            # timestamped at the *end* of the interval (e.g. the 13:00→14:00
+            # flow is stored at 14:00).  Using ``__lt`` therefore drops the
+            # record that users expect to see in that custom window.  The
+            # period-based helpers (today/yesterday/…) still use the original
+            # half-open interval semantics to avoid double counting across
+            # adjacent ranges.
+            time_filters[f"{ts_field}__lte"] = end_utc
+        else:
+            time_filters[f"{ts_field}__lt"] = end_utc
+
+        qs = PhysicalFlow.objects.filter(**time_filters)
 
         if src_iso:
             try:
