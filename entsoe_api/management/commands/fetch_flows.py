@@ -77,6 +77,7 @@ def _dedupe_pairs(pairs: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
 DEFAULT_NEIGHBORS_BY_COUNTRY = {
     # Bulgaria: Romania, Greece, Turkey, Serbia, North Macedonia
     "BG": {"RO", "GR", "TR", "RS", "MK"},
+    "PL":{"DE", "CZ", "SK", "UA", "BY", "LT", "SE"}
     # Extend as needed…
 }
 
