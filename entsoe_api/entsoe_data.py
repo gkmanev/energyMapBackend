@@ -619,6 +619,37 @@ class EntsoeGenerationForecastByType(EntsoeGenerationByType):
     DOC_TYPE = "A71"
     PROCESS_TYPE = "A01"
     VALUE_COLUMN = "forecast_MW"
+    ALL_PSR_CODE = "ALL"
+    ALL_PSR_NAME = "All production types"
+
+    @classmethod
+    def _ensure_psr_values(cls, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Fill missing/blank psr_type & psr_name so aggregation does not drop rows.
+        ENTSO-E occasionally omits MktPSRType in forecast documents when the
+        country only publishes an aggregated total.  We keep those rows by
+        mapping them to a synthetic 'ALL' PSR bucket.
+        """
+        if df is None or df.empty or "psr_type" not in df.columns:
+            return df
+
+        normalized = df["psr_type"].fillna("").astype(str).str.strip()
+        missing_mask = normalized.eq("")
+        if not missing_mask.any():
+            return df
+
+        df = df.copy()
+        df.loc[missing_mask, "psr_type"] = cls.ALL_PSR_CODE
+
+        if "psr_name" not in df.columns:
+            df["psr_name"] = ""
+
+        name_mask = df["psr_name"].fillna("").astype(str).str.strip().eq("")
+        fill_mask = missing_mask | name_mask
+        if fill_mask.any():
+            df.loc[fill_mask, "psr_name"] = cls.ALL_PSR_NAME
+
+        return df
 
     def _fetch_chunk(
         self,
@@ -656,7 +687,8 @@ class EntsoeGenerationForecastByType(EntsoeGenerationByType):
         psr_type: Optional[str] = None,
     ) -> pd.DataFrame:
         base = super().get_range(zone_eic, start, end, psr_type=psr_type)
-        return self._rename_value_col(base)
+        normalized = self._ensure_psr_values(base)
+        return self._rename_value_col(normalized)
 
     def get_last_hours(
         self,
@@ -673,7 +705,8 @@ class EntsoeGenerationForecastByType(EntsoeGenerationByType):
             now_utc=now_utc,
             align_to_hour=align_to_hour,
         )
-        return self._rename_value_col(base)
+        normalized = self._ensure_psr_values(base)
+        return self._rename_value_col(normalized)
 
     @classmethod
     def query_all_countries(
@@ -705,6 +738,7 @@ class EntsoeGenerationForecastByType(EntsoeGenerationByType):
                     )
                     if df.empty:
                         continue
+                    df = cls._ensure_psr_values(df)
                     df = df.copy()
                     df["country"] = country
                     frames.append(df)
@@ -736,6 +770,7 @@ class EntsoeGenerationForecastByType(EntsoeGenerationByType):
                 full.groupby(
                     ["country", "datetime_utc", "psr_type", "psr_name"],
                     as_index=False,
+                    dropna=False,
                 )["generation_MW"]
                 .sum(numeric_only=True)
                 .sort_values(["country", "datetime_utc", "psr_type"])
