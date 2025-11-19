@@ -67,6 +67,35 @@ class CountryGenerationByType(models.Model):
 
 
 
+class CountryGenerationForecastByType(models.Model):
+    """Forecasted generation per production type (A71 / process A01)."""
+
+    country = models.ForeignKey(
+        Country,
+        on_delete=models.PROTECT,
+        related_name="generation_forecast_country",
+    )
+
+    datetime_utc = models.DateTimeField(db_index=True)
+    psr_type = models.CharField(max_length=4)
+    psr_name = models.CharField(max_length=64, blank=True, default="")
+    forecast_mw = models.DecimalField(max_digits=14, decimal_places=3, null=True, blank=True)
+    resolution = models.CharField(max_length=16, blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = (("country", "psr_type", "datetime_utc"),)
+        indexes = [
+            models.Index(fields=["country", "psr_type", "datetime_utc"]),
+        ]
+
+    def __str__(self):
+        return f"{self.country_id} {self.psr_type} {self.datetime_utc:%Y-%m-%d %H:%MZ} forecast"
+
+
+
+
 class ContractType(models.TextChoices):
     A01 = "A01", "Day-ahead"
     A07 = "A07", "Intraday"

@@ -2,7 +2,14 @@
 from __future__ import annotations
 from typing import List, Dict, Optional
 from django.db import transaction
-from .models import Country, CountryCapacitySnapshot, CountryGenerationByType, CountryPricePoint, PhysicalFlow
+from .models import (
+    Country,
+    CountryCapacitySnapshot,
+    CountryGenerationByType,
+    CountryGenerationForecastByType,
+    CountryPricePoint,
+    PhysicalFlow,
+)
 from functools import lru_cache
 from typing import Dict, Iterable, Optional, Union
 
@@ -76,6 +83,36 @@ def save_generation_df(df) -> int:
             "resolution": r.get("resolution") or "",
         }
         obj, _created = CountryGenerationByType.objects.update_or_create(
+            country=c,
+            psr_type=r["psr_type"],
+            datetime_utc=r["datetime_utc"],
+            defaults=defaults,
+        )
+        n += 1
+    return n
+
+
+@transaction.atomic
+def save_generation_forecast_df(df) -> int:
+    """Persist country-level generation forecast rows."""
+
+    if df.empty:
+        return 0
+
+    required = {"country", "datetime_utc", "psr_type", "forecast_MW"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing columns {missing} for CountryGenerationForecastByType")
+
+    n = 0
+    for r in df.to_dict(orient="records"):
+        c = _get_or_create_country(r["country"])
+        defaults = {
+            "psr_name": r.get("psr_name") or r["psr_type"],
+            "forecast_mw": r.get("forecast_MW"),
+            "resolution": r.get("resolution") or "",
+        }
+        CountryGenerationForecastByType.objects.update_or_create(
             country=c,
             psr_type=r["psr_type"],
             datetime_utc=r["datetime_utc"],
