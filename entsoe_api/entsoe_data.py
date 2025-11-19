@@ -687,17 +687,78 @@ class EntsoeGenerationForecastByType(EntsoeGenerationByType):
         now_utc: Optional[dt.datetime] = None,
         skip_errors: bool = True,
     ) -> pd.DataFrame:
-        base = super().query_all_countries(
-            api_key,
-            country_to_eics,
-            start,
-            end,
-            psr_type=psr_type,
-            aggregate_by_country=aggregate_by_country,
-            now_utc=now_utc,
-            skip_errors=skip_errors,
-        )
-        return cls._rename_value_col(base)
+        client = cls(api_key)
+        frames: List[pd.DataFrame] = []
+
+        for country, zones in country_to_eics.items():
+            zone_list = zones if isinstance(zones, list) else [zones]
+            for z in zone_list:
+                try:
+                    # Call the parent implementation directly so aggregation still
+                    # sees the canonical 'generation_MW' column name.  We'll
+                    # rename the column once aggregation is finished.
+                    df = super(EntsoeGenerationForecastByType, client).get_range(
+                        z,
+                        start,
+                        end,
+                        psr_type=psr_type,
+                    )
+                    if df.empty:
+                        continue
+                    df = df.copy()
+                    df["country"] = country
+                    frames.append(df)
+                except Exception as e:
+                    if skip_errors:
+                        print(f"[entsoe] Skipping {country}/{z} due to error: {e}")
+                        continue
+                    raise
+
+        if not frames:
+            cols = [
+                "country",
+                "zone",
+                "datetime_utc",
+                "psr_type",
+                "psr_name",
+                "generation_MW",
+                "resolution",
+            ]
+            empty = pd.DataFrame(
+                columns=cols if not aggregate_by_country else cols[:1] + cols[2:]
+            )
+            return cls._rename_value_col(empty)
+
+        full = pd.concat(frames, ignore_index=True, sort=False)
+
+        if aggregate_by_country:
+            out = (
+                full.groupby(
+                    ["country", "datetime_utc", "psr_type", "psr_name"],
+                    as_index=False,
+                )["generation_MW"]
+                .sum(numeric_only=True)
+                .sort_values(["country", "datetime_utc", "psr_type"])
+                .reset_index(drop=True)
+            )
+            return cls._rename_value_col(out)
+        else:
+            cols = [
+                "country",
+                "zone",
+                "datetime_utc",
+                "psr_type",
+                "psr_name",
+                "generation_MW",
+                "resolution",
+            ]
+            keep = [c for c in cols if c in full.columns]
+            ordered = (
+                full[keep]
+                .sort_values(["country", "zone", "datetime_utc", "psr_type"])
+                .reset_index(drop=True)
+            )
+            return cls._rename_value_col(ordered)
 
 
 ##### ENERGY PRICES #####
