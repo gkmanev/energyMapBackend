@@ -613,6 +613,189 @@ class EntsoeGenerationByType:
         return df2.to_dict(orient="records")
 
 
+class EntsoeGenerationForecastByType(EntsoeGenerationByType):
+    """ENTSO-E Generation Forecast (A71 / processType A01)."""
+
+    DOC_TYPE = "A71"
+    PROCESS_TYPE = "A01"
+    VALUE_COLUMN = "forecast_MW"
+    ALL_PSR_CODE = "ALL"
+    ALL_PSR_NAME = "All production types"
+
+    @classmethod
+    def _ensure_psr_values(cls, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Fill missing/blank psr_type & psr_name so aggregation does not drop rows.
+        ENTSO-E occasionally omits MktPSRType in forecast documents when the
+        country only publishes an aggregated total.  We keep those rows by
+        mapping them to a synthetic 'ALL' PSR bucket.
+        """
+        if df is None or df.empty or "psr_type" not in df.columns:
+            return df
+
+        normalized = df["psr_type"].fillna("").astype(str).str.strip()
+        missing_mask = normalized.eq("")
+        if not missing_mask.any():
+            return df
+
+        df = df.copy()
+        df.loc[missing_mask, "psr_type"] = cls.ALL_PSR_CODE
+
+        if "psr_name" not in df.columns:
+            df["psr_name"] = ""
+
+        name_mask = df["psr_name"].fillna("").astype(str).str.strip().eq("")
+        fill_mask = missing_mask | name_mask
+        if fill_mask.any():
+            df.loc[fill_mask, "psr_name"] = cls.ALL_PSR_NAME
+
+        return df
+
+    def _fetch_chunk(
+        self,
+        zone_eic: str,
+        start_utc: dt.datetime,
+        end_utc: dt.datetime,
+        psr_type: Optional[str] = None,
+    ) -> List[Dict]:
+        params = {
+            "documentType": self.DOC_TYPE,
+            "processType": self.PROCESS_TYPE,
+            "in_Domain": zone_eic,
+            "periodStart": self._to_utc_compact(start_utc),
+            "periodEnd": self._to_utc_compact(end_utc),
+            "securityToken": self.api_key,
+        }
+        if psr_type:
+            params["psrType"] = psr_type
+        xml_text = self._request_with_retries(params)
+        return self._parse_a75(xml_text, zone_eic)
+
+    @classmethod
+    def _rename_value_col(cls, df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            return df
+        if "generation_MW" in df.columns:
+            return df.rename(columns={"generation_MW": cls.VALUE_COLUMN})
+        return df
+
+    def get_range(
+        self,
+        zone_eic: str,
+        start: dt.datetime,
+        end: dt.datetime,
+        psr_type: Optional[str] = None,
+    ) -> pd.DataFrame:
+        base = super().get_range(zone_eic, start, end, psr_type=psr_type)
+        normalized = self._ensure_psr_values(base)
+        return self._rename_value_col(normalized)
+
+    def get_last_hours(
+        self,
+        zone_eic: str,
+        hours: int = 24,
+        psr_type: Optional[str] = None,
+        now_utc: Optional[dt.datetime] = None,
+        align_to_hour: bool = True,
+    ) -> pd.DataFrame:
+        base = super().get_last_hours(
+            zone_eic,
+            hours=hours,
+            psr_type=psr_type,
+            now_utc=now_utc,
+            align_to_hour=align_to_hour,
+        )
+        normalized = self._ensure_psr_values(base)
+        return self._rename_value_col(normalized)
+
+    @classmethod
+    def query_all_countries(
+        cls,
+        api_key: str,
+        country_to_eics: Dict[str, Union[str, List[str]]],
+        start: dt.datetime,
+        end: dt.datetime,
+        psr_type: Optional[str] = None,
+        aggregate_by_country: bool = False,
+        now_utc: Optional[dt.datetime] = None,
+        skip_errors: bool = True,
+    ) -> pd.DataFrame:
+        client = cls(api_key)
+        frames: List[pd.DataFrame] = []
+
+        for country, zones in country_to_eics.items():
+            zone_list = zones if isinstance(zones, list) else [zones]
+            for z in zone_list:
+                try:
+                    # Call the parent implementation directly so aggregation still
+                    # sees the canonical 'generation_MW' column name.  We'll
+                    # rename the column once aggregation is finished.
+                    df = super(EntsoeGenerationForecastByType, client).get_range(
+                        z,
+                        start,
+                        end,
+                        psr_type=psr_type,
+                    )
+                    if df.empty:
+                        continue
+                    df = cls._ensure_psr_values(df)
+                    df = df.copy()
+                    df["country"] = country
+                    frames.append(df)
+                except Exception as e:
+                    if skip_errors:
+                        print(f"[entsoe] Skipping {country}/{z} due to error: {e}")
+                        continue
+                    raise
+
+        if not frames:
+            cols = [
+                "country",
+                "zone",
+                "datetime_utc",
+                "psr_type",
+                "psr_name",
+                "generation_MW",
+                "resolution",
+            ]
+            empty = pd.DataFrame(
+                columns=cols if not aggregate_by_country else cols[:1] + cols[2:]
+            )
+            return cls._rename_value_col(empty)
+
+        full = pd.concat(frames, ignore_index=True, sort=False)
+
+        if aggregate_by_country:
+            out = (
+                full.groupby(
+                    ["country", "datetime_utc", "psr_type", "psr_name"],
+                    as_index=False,
+                    dropna=False,
+                )["generation_MW"]
+                .sum(numeric_only=True)
+                .sort_values(["country", "datetime_utc", "psr_type"])
+                .reset_index(drop=True)
+            )
+            return cls._rename_value_col(out)
+        else:
+            cols = [
+                "country",
+                "zone",
+                "datetime_utc",
+                "psr_type",
+                "psr_name",
+                "generation_MW",
+                "resolution",
+            ]
+            keep = [c for c in cols if c in full.columns]
+            ordered = (
+                full[keep]
+                .sort_values(["country", "zone", "datetime_utc", "psr_type"])
+                .reset_index(drop=True)
+            )
+            return cls._rename_value_col(ordered)
+
+
 ##### ENERGY PRICES #####
 
 class EntsoePrices:
