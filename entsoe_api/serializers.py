@@ -1,6 +1,13 @@
 # yourapp/serializers.py
 from rest_framework import serializers
-from .models import Country, CountryCapacitySnapshot, CountryGenerationByType, CountryPricePoint, PhysicalFlow
+from .models import (
+    Country,
+    CountryCapacitySnapshot,
+    CountryGenerationByType,
+    CountryGenerationForecastByType,
+    CountryPricePoint,
+    PhysicalFlow,
+)
 
 class CountrySerializer(serializers.ModelSerializer):
     class Meta:
@@ -18,6 +25,21 @@ class CountryGenerationByTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = CountryGenerationByType
         fields = ["country","datetime_utc","psr_type","psr_name","generation_mw","resolution"]
+
+
+class CountryGenerationForecastByTypeSerializer(serializers.ModelSerializer):
+    country = serializers.SlugRelatedField(slug_field="iso_code", read_only=True)
+
+    class Meta:
+        model = CountryGenerationForecastByType
+        fields = [
+            "country",
+            "datetime_utc",
+            "psr_type",
+            "psr_name",
+            "forecast_mw",
+            "resolution",
+        ]
 
 
 class CountryPricePointSerializer(serializers.ModelSerializer):

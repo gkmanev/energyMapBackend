@@ -17,10 +17,14 @@ from .models import (
     Country,
     CountryCapacitySnapshot,
     CountryGenerationByType,
+    CountryGenerationForecastByType,
     CountryPricePoint,
     PhysicalFlow,
 )
-from entsoe_api.serializers import PhysicalFlowSerializer
+from entsoe_api.serializers import (
+    CountryGenerationForecastByTypeSerializer,
+    PhysicalFlowSerializer,
+)
 
 
 # ──────────────────────────────── Utils / Helpers ───────────────────────────────
@@ -162,6 +166,7 @@ def api_root(request, format=None):
         "price_bulk": request.build_absolute_uri(reverse("country-prices-bulk-range")),
         "generation_range": request.build_absolute_uri(reverse("generation-range")),
         "generation_bulk_range": request.build_absolute_uri(reverse("generation-bulk-range")),
+        "generation_forecast_range": request.build_absolute_uri(reverse("generation-forecast-range")),
         "flows_range": request.build_absolute_uri(reverse("flows-range")),
         "flows_latest": request.build_absolute_uri(reverse("flows-latest")),
     })
@@ -449,6 +454,55 @@ class CountryGenerationRangeView(APIView):
             "start_utc": _fmt_z(start_utc),
             "end_utc": _fmt_z(end_utc),
             "items": items,
+        }, status=200)
+
+
+class CountryGenerationForecastRangeView(APIView):
+    """GET /api/generation-forecast/range/?country=CZ&period=today|..."""
+
+    def get(self, request):
+        country_q = request.query_params.get("country", "")
+        psr = request.query_params.get("psr")
+        period = request.query_params.get("period")
+        start_s = request.query_params.get("start")
+        end_s = request.query_params.get("end")
+
+        try:
+            country = _get_country_or_400(country_q)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=400)
+
+        try:
+            start_utc, end_utc, label = _compute_window_utc(
+                period,
+                start_s,
+                end_s,
+                allow_yesterday=True,
+                align_to_15min=True,
+            )
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=400)
+
+        if start_utc >= end_utc:
+            return Response({"detail": "start must be earlier than end."}, status=400)
+
+        qs = CountryGenerationForecastByType.objects.filter(
+            country=country,
+            datetime_utc__gte=start_utc,
+            datetime_utc__lt=end_utc,
+        )
+        if psr:
+            qs = qs.filter(psr_type=psr)
+
+        qs = qs.order_by("datetime_utc", "psr_type")
+        serializer = CountryGenerationForecastByTypeSerializer(qs, many=True)
+
+        return Response({
+            "country": country.pk,
+            "date_label": label,
+            "start_utc": _fmt_z(start_utc),
+            "end_utc": _fmt_z(end_utc),
+            "items": serializer.data,
         }, status=200)
 
 

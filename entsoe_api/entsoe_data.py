@@ -613,6 +613,93 @@ class EntsoeGenerationByType:
         return df2.to_dict(orient="records")
 
 
+class EntsoeGenerationForecastByType(EntsoeGenerationByType):
+    """ENTSO-E Generation Forecast (A71 / processType A01)."""
+
+    DOC_TYPE = "A71"
+    PROCESS_TYPE = "A01"
+    VALUE_COLUMN = "forecast_MW"
+
+    def _fetch_chunk(
+        self,
+        zone_eic: str,
+        start_utc: dt.datetime,
+        end_utc: dt.datetime,
+        psr_type: Optional[str] = None,
+    ) -> List[Dict]:
+        params = {
+            "documentType": self.DOC_TYPE,
+            "processType": self.PROCESS_TYPE,
+            "in_Domain": zone_eic,
+            "periodStart": self._to_utc_compact(start_utc),
+            "periodEnd": self._to_utc_compact(end_utc),
+            "securityToken": self.api_key,
+        }
+        if psr_type:
+            params["psrType"] = psr_type
+        xml_text = self._request_with_retries(params)
+        return self._parse_a75(xml_text, zone_eic)
+
+    @classmethod
+    def _rename_value_col(cls, df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            return df
+        if "generation_MW" in df.columns:
+            return df.rename(columns={"generation_MW": cls.VALUE_COLUMN})
+        return df
+
+    def get_range(
+        self,
+        zone_eic: str,
+        start: dt.datetime,
+        end: dt.datetime,
+        psr_type: Optional[str] = None,
+    ) -> pd.DataFrame:
+        base = super().get_range(zone_eic, start, end, psr_type=psr_type)
+        return self._rename_value_col(base)
+
+    def get_last_hours(
+        self,
+        zone_eic: str,
+        hours: int = 24,
+        psr_type: Optional[str] = None,
+        now_utc: Optional[dt.datetime] = None,
+        align_to_hour: bool = True,
+    ) -> pd.DataFrame:
+        base = super().get_last_hours(
+            zone_eic,
+            hours=hours,
+            psr_type=psr_type,
+            now_utc=now_utc,
+            align_to_hour=align_to_hour,
+        )
+        return self._rename_value_col(base)
+
+    @classmethod
+    def query_all_countries(
+        cls,
+        api_key: str,
+        country_to_eics: Dict[str, Union[str, List[str]]],
+        start: dt.datetime,
+        end: dt.datetime,
+        psr_type: Optional[str] = None,
+        aggregate_by_country: bool = False,
+        now_utc: Optional[dt.datetime] = None,
+        skip_errors: bool = True,
+    ) -> pd.DataFrame:
+        base = super().query_all_countries(
+            api_key,
+            country_to_eics,
+            start,
+            end,
+            psr_type=psr_type,
+            aggregate_by_country=aggregate_by_country,
+            now_utc=now_utc,
+            skip_errors=skip_errors,
+        )
+        return cls._rename_value_col(base)
+
+
 ##### ENERGY PRICES #####
 
 class EntsoePrices:
