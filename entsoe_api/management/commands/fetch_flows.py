@@ -1,10 +1,8 @@
 # management/commands/fetch_flows.py
 import os
 import json
-import itertools
 import datetime as dt
 from typing import Dict, List, Tuple, Union, Iterable
-from collections import Counter
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
@@ -29,9 +27,11 @@ def _parse_iso_utc(s: str) -> dt.datetime:
         d = d.astimezone(dt.timezone.utc)
     return d
 
+
 def _floor_to_step(d: dt.datetime, minutes: int = 15) -> dt.datetime:
     d = d.astimezone(dt.timezone.utc).replace(second=0, microsecond=0)
     return d - dt.timedelta(minutes=d.minute % minutes)
+
 
 def _iter_eics(val: Union[str, Iterable[str]]) -> Iterable[str]:
     """Yield normalized EICs from str or iterable[str]."""
@@ -46,6 +46,7 @@ def _iter_eics(val: Union[str, Iterable[str]]) -> Iterable[str]:
             s = str(val).strip()
             if s:
                 yield s
+
 
 def _load_country_to_eics_from_settings() -> Dict[str, Union[str, List[str]]]:
     """
@@ -62,6 +63,7 @@ def _load_country_to_eics_from_settings() -> Dict[str, Union[str, List[str]]]:
         )
     return {str(iso).upper().strip(): eics for iso, eics in chosen.items() if str(iso).strip()}
 
+
 def _dedupe_pairs(pairs: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
     """Remove exact duplicate EIC pairs while preserving order."""
     seen = set()
@@ -71,6 +73,147 @@ def _dedupe_pairs(pairs: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
             seen.add(p)
             out.append(p)
     return out
+
+
+def _parse_countries(raw: str) -> List[str]:
+    raw = raw.strip()
+    try:
+        countries = json.loads(raw)
+    except json.JSONDecodeError:
+        countries = [raw]
+
+    if isinstance(countries, str):
+        countries = [countries]
+    if not isinstance(countries, list) or not all(isinstance(x, str) for x in countries):
+        raise CommandError("--countries must be a JSON array or single ISO code string.")
+    return [x.upper().strip() for x in countries]
+
+
+def _validate_countries(iso_list: List[str], country_to_eics: Dict[str, Union[str, List[str]]]):
+    missing_isos = [iso for iso in iso_list if iso not in country_to_eics]
+    if missing_isos:
+        raise CommandError("Unknown ISO code(s): " + ", ".join(sorted(set(missing_isos))))
+
+
+def _build_neighbor_iso_edges(
+    iso_list: List[str],
+    country_to_eics: Dict[str, Union[str, List[str]]],
+    neighbors_map: Dict[str, Iterable[str]],
+) -> Tuple[List[Tuple[str, str]], List[str], set, Dict[str, int]]:
+    """
+    Build directed ISO edges, capture missing configs, and neighbor counts.
+    Returns (edges, missing_neighbor_map, skipped_neighbors_no_eic, neighbor_counts).
+    """
+
+    pair_iso_edges: List[Tuple[str, str]] = []
+    missing_neighbor_map = []
+    skipped_neighbors_no_eic = set()
+    neighbor_counts: Dict[str, int] = {}
+
+    for src in iso_list:
+        neigh = set(neighbors_map.get(src, set()))
+        if not neigh:
+            missing_neighbor_map.append(src)
+            neighbor_counts[src] = 0
+            continue
+
+        valid_neigh = [n for n in sorted(neigh) if n in country_to_eics and n != src]
+        skipped_neighbors_no_eic.update({n for n in neigh if n not in country_to_eics})
+        neighbor_counts[src] = len(valid_neigh)
+
+        pair_iso_edges.extend((src, n) for n in valid_neigh)
+        pair_iso_edges.extend((n, src) for n in valid_neigh)
+
+    return pair_iso_edges, missing_neighbor_map, skipped_neighbors_no_eic, neighbor_counts
+
+
+def _expand_iso_pairs_to_eic_pairs(
+    pair_iso_edges: List[Tuple[str, str]],
+    country_to_eics: Dict[str, Union[str, List[str]]],
+) -> List[Tuple[str, str]]:
+    eic_pairs: List[Tuple[str, str]] = []
+    for out_iso, in_iso in pair_iso_edges:
+        out_eics = list(_iter_eics(country_to_eics[out_iso]))
+        in_eics = list(_iter_eics(country_to_eics[in_iso]))
+        for o in out_eics:
+            for i in in_eics:
+                eic_pairs.append((o, i))
+    return _dedupe_pairs(eic_pairs)
+
+
+def _summarize_neighbors(
+    iso_list: List[str],
+    neighbors_map: Dict[str, Iterable[str]],
+    country_to_eics: Dict[str, Union[str, List[str]]],
+    eic_pairs: List[Tuple[str, str]],
+    neighbor_counts: Dict[str, int],
+    stdout,
+    style,
+    skipped_neighbors_no_eic: set,
+    missing_neighbor_map: List[str],
+):
+    """Emit human-friendly summary and dry-run sample output."""
+
+    if missing_neighbor_map:
+        stdout.write(
+            style.WARNING(
+                "No neighbors configured for: " + ", ".join(sorted(set(missing_neighbor_map)))
+            )
+        )
+
+    # Build reverse EIC->ISO for summaries
+    rev = {}
+    for iso, eics in country_to_eics.items():
+        for e in _iter_eics(eics):
+            rev[e] = iso
+
+    def _iso_of(eic: str) -> str:
+        return rev.get(eic, "?")
+
+    iso_edge_set = {(_iso_of(o), _iso_of(i)) for (o, i) in eic_pairs}
+    involved = sorted(
+        set([a for a, _ in iso_edge_set] + [b for _, b in iso_edge_set if b != "?"])
+    )
+
+    stdout.write(
+        "Neighbors-only mode — built "
+        f"{len(eic_pairs)} directed EIC pairs across borders. "
+        f"Involved countries: {', '.join(involved)}"
+    )
+    stdout.write(
+        "Neighbor counts: " + ", ".join(f"{k}:{v}" for k, v in sorted(neighbor_counts.items()))
+    )
+    if skipped_neighbors_no_eic:
+        stdout.write(
+            style.WARNING(
+                "Neighbors without EIC mapping (skipped): "
+                + ", ".join(sorted(skipped_neighbors_no_eic))
+            )
+        )
+
+
+def _determine_time_window(options) -> Tuple[dt.datetime, dt.datetime]:
+    start_opt = options.get("start")
+    end_opt = options.get("end")
+    if start_opt or end_opt:
+        if not (start_opt and end_opt):
+            raise CommandError("Provide BOTH --start and --end, or neither.")
+        try:
+            start = _floor_to_step(_parse_iso_utc(start_opt), 15)
+            end = _floor_to_step(_parse_iso_utc(end_opt), 15)
+        except Exception:
+            raise CommandError("Invalid --start/--end format. Use ISO e.g. 2025-10-20T00:00:00Z")
+        if start >= end:
+            raise CommandError("--start must be earlier than --end.")
+        return start, end
+
+    hours = options["hours"]
+    if hours <= 0:
+        raise CommandError("--hours must be > 0.")
+    now_utc = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
+    end = now_utc.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
+    start = end - dt.timedelta(hours=hours)
+    return start, end
 # -------------------------------------------------
 
 # Default neighbors; override in settings.ENTSOE_NEIGHBORS_BY_COUNTRY
@@ -127,92 +270,47 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         # Load maps
         country_to_eics = _load_country_to_eics_from_settings()
-        neighbors_map = getattr(settings, "ENTSOE_NEIGHBORS_BY_COUNTRY", DEFAULT_NEIGHBORS_BY_COUNTRY)
+        neighbors_setting = getattr(settings, "ENTSOE_NEIGHBORS_BY_COUNTRY", None)
+        if neighbors_setting is None:
+            self.stdout.write(
+                self.style.WARNING(
+                    "settings.ENTSOE_NEIGHBORS_BY_COUNTRY not set; "
+                    "using DEFAULT_NEIGHBORS_BY_COUNTRY (sample BG/PL map)."
+                )
+            )
+            neighbors_map = DEFAULT_NEIGHBORS_BY_COUNTRY
+        elif not isinstance(neighbors_setting, dict):
+            raise CommandError("settings.ENTSOE_NEIGHBORS_BY_COUNTRY must be a dict if provided.")
+        else:
+            neighbors_map = neighbors_setting
 
         # Parse countries
-        raw = options["countries"].strip()
-        try:
-            countries = json.loads(raw)
-        except json.JSONDecodeError:
-            countries = [raw]  # allow --countries BG
-
-        if isinstance(countries, str):
-            countries = [countries]
-        if not isinstance(countries, list) or not all(isinstance(x, str) for x in countries):
-            raise CommandError("--countries must be a JSON array or single ISO code string.")
-
-        iso_list = [x.upper().strip() for x in countries]
+        iso_list = _parse_countries(options["countries"])
+        _validate_countries(iso_list, country_to_eics)
 
         # Validate and build neighbor ISO pairs (bidirectional)
-        eic_pairs: List[Tuple[str, str]] = []
-        missing_isos = [iso for iso in iso_list if iso not in country_to_eics]
-        if missing_isos:
-            raise CommandError("Unknown ISO code(s): " + ", ".join(sorted(set(missing_isos))))
+        (
+            pair_iso_edges,
+            missing_neighbor_map,
+            skipped_neighbors_no_eic,
+            neighbor_counts,
+        ) = _build_neighbor_iso_edges(iso_list, country_to_eics, neighbors_map)
 
-        skipped_neighbors_no_eic = set()
-        missing_neighbor_map = []
-
-        pair_iso_edges = []
-        for src in iso_list:
-            neigh = set(neighbors_map.get(src, set()))
-            if not neigh:
-                missing_neighbor_map.append(src)
-                continue
-            # (src->n) and (n->src), but only if neighbor has an EIC mapping
-            valid_neigh = [n for n in sorted(neigh) if n in country_to_eics and n != src]
-            skipped_neighbors_no_eic.update({n for n in neigh if n not in country_to_eics})
-
-            pair_iso_edges.extend((src, n) for n in valid_neigh)
-            pair_iso_edges.extend((n, src) for n in valid_neigh)
-
-        if missing_neighbor_map:
-            self.stdout.write(self.style.WARNING(
-                "No neighbors configured for: " + ", ".join(sorted(set(missing_neighbor_map)))
-            ))
-
-        # Expand ISO pairs to EIC pairs
-        for out_iso, in_iso in pair_iso_edges:
-            out_eics = list(_iter_eics(country_to_eics[out_iso]))
-            in_eics = list(_iter_eics(country_to_eics[in_iso]))
-            for o in out_eics:
-                for i in in_eics:
-                    eic_pairs.append((o, i))
-
-        eic_pairs = _dedupe_pairs(eic_pairs)
+        eic_pairs = _expand_iso_pairs_to_eic_pairs(pair_iso_edges, country_to_eics)
         if not eic_pairs:
             raise CommandError("No EIC pairs found to query (neighbors-only produced nothing).")
 
-        # ---------- reporting / dry-run ----------
-        # Build reverse EIC->ISO for summaries
-        rev = {}
-        for iso, eics in country_to_eics.items():
-            for e in _iter_eics(eics):
-                rev[e] = iso
-
-        def _iso_of(eic: str) -> str:
-            return rev.get(eic, "?")
-
-        # Neighbor counts per selected ISO
-        neighbor_counts = {}
-        for src in iso_list:
-            neigh = set(neighbors_map.get(src, set()))
-            neighbor_counts[src] = len([n for n in neigh if n in country_to_eics and n != src])
-
-        iso_edge_set = {(_iso_of(o), _iso_of(i)) for (o, i) in eic_pairs}
-        involved = sorted(set([a for a, _ in iso_edge_set] + [b for _, b in iso_edge_set if b != "?"]))
-
-        self.stdout.write(
-            "Neighbors-only mode — built "
-            f"{len(eic_pairs)} directed EIC pairs across borders. "
-            f"Involved countries: {', '.join(involved)}"
+        _summarize_neighbors(
+            iso_list,
+            neighbors_map,
+            country_to_eics,
+            eic_pairs,
+            neighbor_counts,
+            self.stdout,
+            self.style,
+            skipped_neighbors_no_eic,
+            missing_neighbor_map,
         )
-        self.stdout.write(
-            "Neighbor counts: " + ", ".join(f"{k}:{v}" for k, v in sorted(neighbor_counts.items()))
-        )
-        if skipped_neighbors_no_eic:
-            self.stdout.write(self.style.WARNING(
-                "Neighbors without EIC mapping (skipped): " + ", ".join(sorted(skipped_neighbors_no_eic))
-            ))
 
         if options["dry_run"]:
             show = min(10, len(eic_pairs))
@@ -221,25 +319,7 @@ class Command(BaseCommand):
             return
 
         # ---------- time window ----------
-        start_opt = options.get("start")
-        end_opt = options.get("end")
-        if start_opt or end_opt:
-            if not (start_opt and end_opt):
-                raise CommandError("Provide BOTH --start and --end, or neither.")
-            try:
-                start = _floor_to_step(_parse_iso_utc(start_opt), 15)
-                end = _floor_to_step(_parse_iso_utc(end_opt), 15)
-            except Exception:
-                raise CommandError("Invalid --start/--end format. Use ISO e.g. 2025-10-20T00:00:00Z")
-            if start >= end:
-                raise CommandError("--start must be earlier than --end.")
-        else:
-            hours = options["hours"]
-            if hours <= 0:
-                raise CommandError("--hours must be > 0.")
-            now_utc = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
-            end = now_utc.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
-            start = end - dt.timedelta(hours=hours)
+        start, end = _determine_time_window(options)
 
         # ---------- fetch ----------
         api_key = os.getenv("ENTSOE_TOKEN")
