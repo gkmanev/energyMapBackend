@@ -699,7 +699,11 @@ class PhysicalFlowsLatestView(APIView):
 
         src_field, dst_field, ts_field = _flow_field_names()
 
-        latest_ts = PhysicalFlow.objects.aggregate(mx=Max(ts_field))["mx"]
+        latest_ts = (
+            PhysicalFlow.objects
+            .filter(Q(**{src_field: country.pk}) | Q(**{dst_field: country.pk}))
+            .aggregate(mx=Max(ts_field))["mx"]
+        )
         if not latest_ts:
             return Response({
                 "country": country.pk,
