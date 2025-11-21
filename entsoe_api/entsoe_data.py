@@ -1,6 +1,7 @@
 # entsoe_installed_capacity.py
 
 import datetime as dt
+import itertools
 from typing import Optional, List, Dict, Union, Iterable, Tuple
 import xml.etree.ElementTree as ET
 
@@ -1250,15 +1251,20 @@ class EntsoePhysicalFlows:
                 ti = period.find("ns:timeInterval", ns) if ns else period.find("timeInterval")
                 start_el = ti.find("ns:start", ns) if (ti is not None and ns) else (ti.find("start") if ti is not None else None)
 
-                # Resolution can be on Period or TimeSeries
+                # Resolution can be on Period or TimeSeries; default to ENTSO-E's
+                # 15-minute granularity if missing.  Some payloads declare the
+                # default namespace but ElementTree occasionally fails to match the
+                # namespaced <resolution> tag via find("ns:resolution").  To avoid
+                # silently falling back to PT15M when a coarser resolution is
+                # present (e.g. PT60M), also search by localname.
                 res_el = (period.find("ns:resolution", ns) if ns else period.find("resolution")) or \
                          (s.find("ns:resolution", ns) if ns else s.find("resolution"))
-                # Default to ENTSO-E's 15-minute granularity if the resolution is
-                # omitted in the payload.  A few edge responses have missing
-                # <resolution> tags, which previously made us fall back to hourly
-                # (PT60M) and produced the wrong interval count.  Using PT15M keeps
-                # the step consistent with the usual A11 documents (as in
-                # 15-minute interconnector flows).
+                if res_el is None:
+                    for candidate in itertools.chain(period.iter(), s.iter()):
+                        if candidate.tag.split("}")[-1] == "resolution":
+                            res_el = candidate
+                            break
+
                 res_iso = (res_el.text.strip() if res_el is not None and res_el.text else "PT15M")
                 step_min = EntsoePhysicalFlows._iso8601_duration_to_minutes(res_iso) or 15
 
