@@ -624,12 +624,21 @@ class PhysicalFlowsRangeView(APIView):
             start_utc, end_utc, _ = _compute_window_utc(period, start_s, end_s)
         except ValueError as e:
             return Response({"detail": str(e)}, status=400)
+
+        # When using period shortcuts (e.g. period=today) clamp the upper bound
+        # to "now" so we do not surface future/forecast rows that may already
+        # exist in the DB (e.g. after a manual backfill of a full day).  Align
+        # the cutoff to 15-minute buckets to match the PhysicalFlow resolution.
+        explicit_range = bool(start_s or end_s) and not period
+        if period and not explicit_range:
+            now_utc = _floor_15min(_now_utc())
+            if end_utc > now_utc:
+                end_utc = now_utc
+
         if start_utc >= end_utc:
             return Response({"detail": "start must be earlier than end."}, status=400)
 
         src_field, dst_field, ts_field = _flow_field_names()
-
-        explicit_range = bool(start_s or end_s) and not period
 
         time_filters = {f"{ts_field}__gte": start_utc}
         if explicit_range:
