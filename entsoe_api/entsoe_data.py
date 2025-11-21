@@ -1253,8 +1253,14 @@ class EntsoePhysicalFlows:
                 # Resolution can be on Period or TimeSeries
                 res_el = (period.find("ns:resolution", ns) if ns else period.find("resolution")) or \
                          (s.find("ns:resolution", ns) if ns else s.find("resolution"))
-                res_iso = (res_el.text.strip() if res_el is not None and res_el.text else "PT60M")
-                step_min = EntsoePhysicalFlows._iso8601_duration_to_minutes(res_iso) or 60
+                # Default to ENTSO-E's 15-minute granularity if the resolution is
+                # omitted in the payload.  A few edge responses have missing
+                # <resolution> tags, which previously made us fall back to hourly
+                # (PT60M) and produced the wrong interval count.  Using PT15M keeps
+                # the step consistent with the usual A11 documents (as in
+                # 15-minute interconnector flows).
+                res_iso = (res_el.text.strip() if res_el is not None and res_el.text else "PT15M")
+                step_min = EntsoePhysicalFlows._iso8601_duration_to_minutes(res_iso) or 15
 
                 if not (start_el is not None and start_el.text):
                     continue
