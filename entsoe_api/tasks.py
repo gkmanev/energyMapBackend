@@ -12,11 +12,12 @@ def _format_iso(dt_obj: datetime) -> str:
     return dt_obj.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _daily_window_utc() -> tuple[str, str]:
-    today_utc = datetime.now(timezone.utc).date()
-    start = datetime(today_utc.year, today_utc.month, today_utc.day, tzinfo=timezone.utc)
-    end = start + timedelta(days=1)
-    return _format_iso(start), _format_iso(end)
+def _local_daily_window(tz: ZoneInfo) -> tuple[str, str]:
+    """Return (start, end) ISO strings for the current local day in UTC."""
+    today_local = datetime.now(tz).date()
+    start_local = datetime.combine(today_local, time(0, 0), tzinfo=tz)
+    end_local = start_local + timedelta(days=1)
+    return _format_iso(start_local), _format_iso(end_local)
 
 
 def _hourly_window(hours_back: int, hours_forward: int = 1) -> tuple[str, str]:
@@ -36,13 +37,7 @@ def fetch_installed_capacity_task():
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
 def fetch_prices_daily_task(self):
     tz = ZoneInfo("Europe/Sofia")
-    now_local = datetime.now(tz)
-
-    start_local = datetime.combine(now_local.date() - timedelta(days=1), time(0, 0), tzinfo=tz)
-    end_local = datetime.combine(now_local.date() + timedelta(days=1), time(0, 0), tzinfo=tz)
-
-    start_utc = _format_iso(start_local)
-    end_utc = _format_iso(end_local)
+    start_utc, end_utc = _local_daily_window(tz)
     logger.info("Daily prices window: %s -> %s", start_utc, end_utc)
 
     # If your management command options are named --start/--end, call_command takes them as kwargs:
@@ -52,13 +47,8 @@ def fetch_prices_daily_task(self):
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
 def fetch_generation_daily_task(self):
     tz = ZoneInfo("Europe/Sofia")
-    now_local = datetime.now(tz)
-
-    start_local = datetime.combine(now_local.date() - timedelta(days=2), time(0, 0), tzinfo=tz)
-    end_local = datetime.combine(now_local.date())
-
-    start_utc = _format_iso(start_local)
-    end_utc = _format_iso(end_local)
+    start_utc, end_utc = _local_daily_window(tz)
+    logger.info("Daily generation window: %s -> %s", start_utc, end_utc)
 
     # If your management command options are named --start/--end, call_command takes them as kwargs:
     call_command("fetch_generation", start=start_utc, end=end_utc)
@@ -67,7 +57,7 @@ def fetch_generation_daily_task(self):
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
 def fetch_generation_forecast_hourly_task(self):
     """Fetch rolling generation forecasts every hour."""
-    start_iso, end_iso = _daily_window_utc()
+    start_iso, end_iso = _local_daily_window(ZoneInfo("Europe/Sofia"))
     logger.info("Hourly forecast window: %s -> %s", start_iso, end_iso)
     call_command("fetch_generation_forecast", start=start_iso, end=end_iso)
 
@@ -75,14 +65,14 @@ def fetch_generation_forecast_hourly_task(self):
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
 def fetch_generation_hourly_task(self):
     """Fetch actual generation using a 24h sliding window each hour."""
-    start_iso, end_iso = _daily_window_utc()
+    start_iso, end_iso = _local_daily_window(ZoneInfo("Europe/Sofia"))
     logger.info("Hourly generation window: %s -> %s", start_iso, end_iso)
     call_command("fetch_generation", start=start_iso, end=end_iso)
 
 
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
 def fetch_prices_hourly_task(self):
-    """Fetch day-ahead price data using a rolling 3-day window each hour."""
-    start_iso, end_iso = _daily_window_utc
+    """Fetch day-ahead price data for the current local day each hour."""
+    start_iso, end_iso = _local_daily_window(ZoneInfo("Europe/Sofia"))
     logger.info("Hourly prices window: %s -> %s", start_iso, end_iso)
     call_command("fetch_prices", start=start_iso, end=end_iso)
