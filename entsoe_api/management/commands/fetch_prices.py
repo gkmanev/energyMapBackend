@@ -92,9 +92,9 @@ class Command(BaseCommand):
 
     def handle(self, *args, **opts):
         # --- API key ---
-        api_key = getattr(settings, "ENTSOE_API_KEY", "") or os.getenv("ENTSOE_API_KEY") or os.getenv("ENTSOE_TOKEN")
+        api_key = os.getenv("ENTSOE_TOKEN_PRICE")
         if not api_key:
-            raise CommandError("Missing ENTSOE_API_KEY (settings or env).")
+            raise CommandError("Missing ENTSOE_TOKEN_PRICE (settings or env).")
 
         # --- mapping (prices use bidding zones) ---
         mapping = getattr(settings, "ENTSOE_PRICE_COUNTRY_TO_EICS", None)
