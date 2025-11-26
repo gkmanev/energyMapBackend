@@ -6,6 +6,7 @@ import os
 import datetime as dt
 from typing import Dict, List, Union
 
+import pandas as pd
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
@@ -57,6 +58,19 @@ def _compute_window_utc(period: str | None, start_s: str | None, end_s: str | No
     return start, end
 
 
+def _iter_windows(start: dt.datetime, end: dt.datetime, slice_hours: int | None):
+    if not slice_hours or slice_hours <= 0:
+        yield start, end
+        return
+
+    step = dt.timedelta(hours=slice_hours)
+    cur = start
+    while cur < end:
+        nxt = min(cur + step, end)
+        yield cur, nxt
+        cur = nxt
+
+
 class Command(BaseCommand):
     help = (
         "Fetch ENTSO-E A44 prices (Day-ahead/Intraday) for one country (--country BG) "
@@ -88,6 +102,21 @@ class Command(BaseCommand):
             "--dry-run",
             action="store_true",
             help="Fetch and show row count but do NOT write to DB.",
+        )
+        parser.add_argument(
+            "--slice-hours",
+            type=int,
+            default=24,
+            help=(
+                "Chunk the requested window into N-hour slices to reduce payload size per call "
+                "(default: 24). Use 0 to disable slicing."
+            ),
+        )
+        parser.add_argument(
+            "--throttle",
+            type=float,
+            default=1.0,
+            help="Seconds to pause between zone requests to avoid ENTSO-E 429s (default: 1.0).",
         )
 
     def handle(self, *args, **opts):
@@ -123,26 +152,47 @@ class Command(BaseCommand):
         if opts.get("period") == "dayahead" and contract != "A01":
             raise CommandError("period=dayahead is only valid with --contract=A01 (Day-ahead).")
 
+        slice_hours = opts.get("slice_hours")
+        if slice_hours is not None and slice_hours < 0:
+            raise CommandError("--slice-hours must be >= 0.")
+        throttle_seconds = float(opts.get("throttle") or 0.0)
+        if throttle_seconds < 0:
+            raise CommandError("--throttle must be >= 0.")
+
         self.stdout.write(
             f"Fetching prices {contract} for {country_arg} in [{start_utc:%Y-%m-%d %H:%MZ}, {end_utc:%Y-%m-%d %H:%MZ}) UTC..."
         )
 
-        # --- fetch (country-aggregated, because your frontend is country-based) ---
-        df = EntsoePrices.query_all_countries(
-            api_key=api_key,
-            country_to_eics=country_to_eics,
-            start=start_utc,
-            end=end_utc,
-            contract_type=contract,
-            aggregate_by_country=True,
-            skip_errors=True,
-        )
+        all_frames: List[pd.DataFrame] = []
+        for window_start, window_end in _iter_windows(start_utc, end_utc, slice_hours):
+            self.stdout.write(
+                f"  Window [{window_start:%Y-%m-%d %H:%MZ}, {window_end:%Y-%m-%d %H:%MZ})"
+            )
+            df_window = EntsoePrices.query_all_countries(
+                api_key=api_key,
+                country_to_eics=country_to_eics,
+                start=window_start,
+                end=window_end,
+                contract_type=contract,
+                aggregate_by_country=True,
+                skip_errors=True,
+                throttle_seconds=throttle_seconds,
+            )
+            if df_window.empty:
+                self.stdout.write("    No data returned for this slice (skipped).")
+                continue
+            all_frames.append(df_window)
 
-        if df.empty:
+        if not all_frames:
             self.stdout.write(self.style.WARNING("No data returned."))
             return
 
-        self.stdout.write(f"Fetched {len(df)} rows.")
+        sort_keys = [c for c in ["country", "datetime_utc"] if c in all_frames[0].columns]
+        df = pd.concat(all_frames, ignore_index=True, sort=False)
+        if sort_keys:
+            df = df.sort_values(sort_keys).reset_index(drop=True)
+
+        self.stdout.write(f"Fetched {len(df)} rows across {len(all_frames)} slice(s).")
 
         # --- store ---
         if opts.get("dry_run"):

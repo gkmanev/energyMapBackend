@@ -2,6 +2,7 @@
 
 import datetime as dt
 import itertools
+import time
 from typing import Optional, List, Dict, Union, Iterable, Tuple
 import xml.etree.ElementTree as ET
 
@@ -55,9 +56,15 @@ class EntsoeInstalledCapacity:
       - 'year' is the calendar year that snapshot applies to.
     """
 
-    def __init__(self, api_key: str, session: Optional[requests.Session] = None):
+    def __init__(
+        self,
+        api_key: str,
+        session: Optional[requests.Session] = None,
+        max_retries: int = 7,
+    ):
         self.api_key = api_key
         self.session = session or requests.Session()
+        self.max_retries = max(1, max_retries)
 
     # ---------- internal helpers ----------
 
@@ -69,10 +76,11 @@ class EntsoeInstalledCapacity:
         d = d.astimezone(dt.timezone.utc)
         return d.strftime("%Y%m%d%H%M")
 
-    def _request_with_retries(self, params: dict, max_retries: int = 5, timeout: int = 45) -> str:
+    def _request_with_retries(self, params: dict, max_retries: Optional[int] = None, timeout: int = 45) -> str:
         """GET with basic retry/backoff on 429/5xx; raise on other errors."""
         backoff = 1.0
-        for _ in range(max_retries):
+        retries = max_retries or self.max_retries
+        for _ in range(retries):
             r = self.session.get(BASE_URL, params=params, timeout=timeout)
             if r.status_code == 200 and r.text.strip():
                 return r.text
@@ -326,9 +334,15 @@ class EntsoeGenerationByType:
       (plus 'country' when using query_all_countries and 'aggregate_by_country=False')
     """
 
-    def __init__(self, api_key: str, session: Optional[requests.Session] = None):
+    def __init__(
+        self,
+        api_key: str,
+        session: Optional[requests.Session] = None,
+        max_retries: int = 7,
+    ):
         self.api_key = api_key
         self.session = session or requests.Session()
+        self.max_retries = max(1, max_retries)
 
     # ---------- internal helpers ----------
 
@@ -355,10 +369,11 @@ class EntsoeGenerationByType:
             yield cur, nxt
             cur = nxt
 
-    def _request_with_retries(self, params: dict, max_retries: int = 5, timeout: int = 45) -> str:
+    def _request_with_retries(self, params: dict, max_retries: Optional[int] = None, timeout: int = 45) -> str:
         """GET with backoff on 429/5xx; raise on other errors."""
         backoff = 1.0
-        for _ in range(max_retries):
+        retries = max_retries or self.max_retries
+        for _ in range(retries):
             r = self.session.get(BASE_URL, params=params, timeout=timeout)
             if r.status_code == 200 and r.text.strip():
                 return r.text
@@ -808,9 +823,15 @@ class EntsoePrices:
     - 1-year window limit, 100-document page limit (use 'offset' to paginate)
     """
 
-    def __init__(self, api_key: str, session: Optional[requests.Session] = None):
+    def __init__(
+        self,
+        api_key: str,
+        session: Optional[requests.Session] = None,
+        max_retries: int = 7,
+    ):
         self.api_key = api_key
         self.session = session or requests.Session()
+        self.max_retries = max(1, max_retries)
 
     # ---------- helpers ----------
 
@@ -827,10 +848,11 @@ class EntsoePrices:
             return d.replace(tzinfo=dt.timezone.utc)
         return d.astimezone(dt.timezone.utc)
 
-    def _request_with_retries(self, params: dict, max_retries: int = 5, timeout: int = 45) -> str:
+    def _request_with_retries(self, params: dict, max_retries: Optional[int] = None, timeout: int = 45) -> str:
         """GET with retry/backoff; ALWAYS return response text (XML string)."""
         backoff = 1.0
-        for _ in range(max_retries):
+        retries = max_retries or self.max_retries
+        for _ in range(retries):
             r = self.session.get(BASE_URL, params=params, timeout=timeout)
             # success
             if r.status_code == 200 and r.text and r.text.strip():
@@ -1033,6 +1055,7 @@ class EntsoePrices:
         contract_type: str = "A01",
         aggregate_by_country: bool = True,
         skip_errors: bool = True,
+        throttle_seconds: float = 0.0,
     ) -> pd.DataFrame:
         """
         Fetch A44 prices for MANY countries in [start, end).
@@ -1051,6 +1074,8 @@ class EntsoePrices:
                     df = df.copy()
                     df["country"] = country
                     frames.append(df)
+                    if throttle_seconds:
+                        time.sleep(max(0.0, throttle_seconds))
                 except Exception as e:
                     if skip_errors:
                         print(f"[entsoe] A44 skip {country}/{z}: {e}")
