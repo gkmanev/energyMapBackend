@@ -827,28 +827,17 @@ class EntsoePrices:
             return d.replace(tzinfo=dt.timezone.utc)
         return d.astimezone(dt.timezone.utc)
 
-    def _request_with_retries(self, params: dict, max_retries: int = 5, timeout: int = 45) -> str:
-        """GET with retry/backoff; ALWAYS return response text (XML string)."""
-        backoff = 1.0
-        for _ in range(max_retries):
-            r = self.session.get(BASE_URL, params=params, timeout=timeout)
+    def _request_with_retries(self, params: dict) -> str:
+        """GET with retry/backoff; ALWAYS return response text (XML string)."""        
+        try:
+            r = self.session.get(BASE_URL, params=params)     
+            print(r.text) 
+            print(params) 
             # success
-            if r.status_code == 200 and r.text and r.text.strip():
-                return r.text  # return TEXT, not the Response object
-            # retryable
-            if r.status_code in (429, 500, 502, 503, 504):
-                retry_after = r.headers.get("Retry-After")
-                try:
-                    sleep_s = float(retry_after) if retry_after else backoff
-                except ValueError:
-                    sleep_s = backoff
-                import time as _t
-                _t.sleep(sleep_s)
-                backoff = min(backoff * 2, 30)
-                continue
-            # non-retryable
-            r.raise_for_status()
-        raise TimeoutError("ENTSO-E request failed after retries")
+            if r.status_code == 200:
+                return r.text
+        except Exception as e:     
+            print(f"ENTSO-E request failed: {e}")
 
     @staticmethod
     def _iso8601_duration_to_minutes(duration: str) -> int:
@@ -974,7 +963,7 @@ class EntsoePrices:
         start: dt.datetime,
         end: dt.datetime,
         contract_type: str = "A01",
-        paginate: bool = True,
+        paginate: bool = False,
     ) -> pd.DataFrame:
         """
         Fetch A44 prices for a single bidding zone (EIC) in [start, end).
@@ -1004,7 +993,7 @@ class EntsoePrices:
             if not records:
                 break
             frames.append(pd.DataFrame.from_records(records))
-            if not paginate or len(records) < 100:
+            if not paginate:
                 break
             offset += 100
 
