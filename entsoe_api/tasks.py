@@ -75,4 +75,4 @@ def fetch_prices_hourly_task(self):
     """Fetch day-ahead price data for the current local day each hour."""
     start_iso, end_iso = _local_daily_window(ZoneInfo("Europe/Sofia"))
     logger.info("Hourly prices window: %s -> %s", start_iso, end_iso)
-    call_command("fetch_prices", start=start_iso, end=end_iso)
+    call_command("fetch_prices", throttle=10, start=start_iso, end=end_iso)
