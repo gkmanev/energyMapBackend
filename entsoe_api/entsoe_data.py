@@ -830,9 +830,7 @@ class EntsoePrices:
     def _request_with_retries(self, params: dict) -> str:
         """GET with retry/backoff; ALWAYS return response text (XML string)."""        
         try:
-            r = self.session.get(BASE_URL, params=params)     
-            print(r.text) 
-            print(params) 
+            r = self.session.get(BASE_URL, params=params)
             # success
             if r.status_code == 200:
                 return r.text
