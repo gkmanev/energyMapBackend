@@ -93,6 +93,7 @@ class Command(BaseCommand):
     def handle(self, *args, **opts):
         # --- API key ---
         api_key = getattr(settings, "ENTSOE_API_KEY", "") or os.getenv("ENTSOE_API_KEY") or os.getenv("ENTSOE_TOKEN")
+        print(api_key)
         if not api_key:
             raise CommandError("Missing ENTSOE_API_KEY (settings or env).")
 
