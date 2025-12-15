@@ -80,7 +80,7 @@ def fetch_prices_hourly_task(self):
 
 
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
-def fetch_hourly_task(self):
+def fetch_flows_hourly_task(self):
     """Fetch flows for all countries."""
     logger.info("Hourly flows window: Last 48")
     call_command("fetch_flows", all_eu=True, hours=48)
