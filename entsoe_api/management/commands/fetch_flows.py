@@ -142,7 +142,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--countries",
             type=str,
-            required=True,
+            required=False,
             help=(
                 "Single ISO (e.g. BG) or JSON array of ISOs, e.g. '[\"BG\",\"RO\",\"GR\"]'. "
                 "Pairs ONLY with direct neighbors (bidirectional)."
@@ -178,6 +178,9 @@ class Command(BaseCommand):
         # Load maps
         country_to_eics = _load_country_to_eics_from_settings()
         neighbors_map = getattr(settings, "ENTSOE_NEIGHBORS_BY_COUNTRY", DEFAULT_NEIGHBORS_BY_COUNTRY)
+
+        if not options["all_eu"] and not options.get("countries"):
+            raise CommandError("Either --countries or --all-eu must be provided.")
 
         if options["all_eu"]:
             # Use all countries from your settings
