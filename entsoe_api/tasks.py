@@ -76,3 +76,11 @@ def fetch_prices_hourly_task(self):
     start_iso, end_iso = _local_daily_window(ZoneInfo("Europe/Sofia"))
     logger.info("Hourly prices window: %s -> %s", start_iso, end_iso)
     call_command("fetch_prices", start=start_iso, end=end_iso)
+
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def fetch_hourly_task(self):
+    """Fetch flows for all countries."""
+    logger.info("Hourly flows window: Last 48")
+    call_command("fetch_flows", all_eu=True, hours=48)
