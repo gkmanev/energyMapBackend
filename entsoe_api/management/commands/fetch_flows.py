@@ -167,25 +167,39 @@ class Command(BaseCommand):
             default=False,
             help="Show the expanded neighbor-only ISO/EIC pairs; do not call ENTSO-E or write to DB.",
         )
+        parser.add_argument(
+            "--all-eu",
+            action="store_true",
+            default=False,
+            help="Fetch flows for all EU countries defined in settings.",
+        )
 
     def handle(self, *args, **options):
         # Load maps
         country_to_eics = _load_country_to_eics_from_settings()
         neighbors_map = getattr(settings, "ENTSOE_NEIGHBORS_BY_COUNTRY", DEFAULT_NEIGHBORS_BY_COUNTRY)
 
-        # Parse countries
-        raw = options["countries"].strip()
-        try:
-            countries = json.loads(raw)
-        except json.JSONDecodeError:
-            countries = [raw]  # allow --countries BG
+        if options["all_eu"]:
+            # Use all countries from your settings
+            iso_list = [iso.upper().strip() for iso in country_to_eics.keys()]
+            self.stdout.write(f"Fetching for ALL countries: {', '.join(sorted(iso_list))}")
+        else:
+            if not options["countries"]:
+                raise CommandError("Either --countries or --all-eu must be provided.")
 
-        if isinstance(countries, str):
-            countries = [countries]
-        if not isinstance(countries, list) or not all(isinstance(x, str) for x in countries):
-            raise CommandError("--countries must be a JSON array or single ISO code string.")
+            # Parse countries
+            raw = options["countries"].strip()
+            try:
+                countries = json.loads(raw)
+            except json.JSONDecodeError:
+                countries = [raw]  # allow --countries BG
 
-        iso_list = [x.upper().strip() for x in countries]
+            if isinstance(countries, str):
+                countries = [countries]
+            if not isinstance(countries, list) or not all(isinstance(x, str) for x in countries):
+                raise CommandError("--countries must be a JSON array or single ISO code string.")
+
+            iso_list = [x.upper().strip() for x in countries]
 
         # Validate and build neighbor ISO pairs (bidirectional)
         eic_pairs: List[Tuple[str, str]] = []
