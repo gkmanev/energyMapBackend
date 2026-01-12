@@ -155,7 +155,7 @@ CELERY_BEAT_SCHEDULE = {
     },
     "fetch_flows_hourly": {
         "task": "entsoe_api.tasks.fetch_flows_hourly_task",
-        "schedule": crontab(minute=20),
+        "schedule": crontab(minute='*/17')
     },
 }
 
