@@ -313,7 +313,7 @@ class CountryPricesBulkRangeView(APIView):
     """
     GET /api/prices/bulk-range/?countries=AT,DE,FR&contract=A01&period=today
     GET /api/prices/bulk-range/?countries=AT,DE,FR&contract=A01&start=...&end=...
-    GET /api/prices/bulk-range/?countries=AT,DE,FR&contract=A01&start=...&end=...&resolution=m
+    GET /api/prices/bulk-range/?countries=AT,DE,FR&contract=A01&start=...&end=...&resolution=d
     """
     MAX_COUNTRIES = 20
 
@@ -324,7 +324,7 @@ class CountryPricesBulkRangeView(APIView):
         start_s = request.query_params.get("start")
         end_s = request.query_params.get("end")
         resolution = request.query_params.get("resolution")
-        aggregate_daily = (resolution or "").lower() == "m"
+        aggregate_daily = (resolution or "").lower() == "d"
 
         country_codes = _split_codes(countries_param)
         if not country_codes:
