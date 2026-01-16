@@ -6,7 +6,8 @@ from typing import Iterable, Tuple, Dict, List
 
 from django.conf import settings
 from django.utils.timezone import get_default_timezone
-from django.db.models import Max, Q
+from django.db.models import Avg, Max, Q
+from django.db.models.functions import TruncDay
 from rest_framework.views import APIView
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -312,6 +313,7 @@ class CountryPricesBulkRangeView(APIView):
     """
     GET /api/prices/bulk-range/?countries=AT,DE,FR&contract=A01&period=today
     GET /api/prices/bulk-range/?countries=AT,DE,FR&contract=A01&start=...&end=...
+    GET /api/prices/bulk-range/?countries=AT,DE,FR&contract=A01&start=...&end=...&resolution=m
     """
     MAX_COUNTRIES = 20
 
@@ -321,6 +323,8 @@ class CountryPricesBulkRangeView(APIView):
         period = request.query_params.get("period")
         start_s = request.query_params.get("start")
         end_s = request.query_params.get("end")
+        resolution = request.query_params.get("resolution")
+        aggregate_daily = (resolution or "").lower() == "m"
 
         country_codes = _split_codes(countries_param)
         if not country_codes:
@@ -343,33 +347,59 @@ class CountryPricesBulkRangeView(APIView):
         except ValueError as e:
             return Response({"detail": str(e)}, status=400)
 
-        qs = (CountryPricePoint.objects
-              .filter(
-                  country_id__in=valid_countries,
-                  contract_type=contract,
-                  datetime_utc__gte=start_utc,
-                  datetime_utc__lt=end_utc,
-              )
-              .select_related('country')
-              .order_by("country_id", "datetime_utc"))
+        base_qs = CountryPricePoint.objects.filter(
+            country_id__in=valid_countries,
+            contract_type=contract,
+            datetime_utc__gte=start_utc,
+            datetime_utc__lt=end_utc,
+        )
 
         results: Dict[str, dict] = {}
-        for rec in qs:
-            cid = rec.country.pk
-            bucket = results.setdefault(cid, {
-                "country": cid,
-                "contract_type": contract,
-                "start_utc": _fmt_z(start_utc),
-                "end_utc": _fmt_z(end_utc),
-                "items": [],
-            })
-            bucket["items"].append({
-                "datetime_utc": _fmt_z(rec.datetime_utc),
-                "price": rec.price,
-                "currency": rec.currency,
-                "unit": rec.unit,
-                "resolution": rec.resolution,
-            })
+        if aggregate_daily:
+            qs = (base_qs
+                  .annotate(day=TruncDay("datetime_utc", tzinfo=dt.timezone.utc))
+                  .values("country_id", "day")
+                  .annotate(
+                      price=Avg("price"),
+                      currency=Max("currency"),
+                      unit=Max("unit"),
+                  )
+                  .order_by("country_id", "day"))
+
+            for rec in qs:
+                cid = rec["country_id"]
+                bucket = results.setdefault(cid, {
+                    "country": cid,
+                    "contract_type": contract,
+                    "start_utc": _fmt_z(start_utc),
+                    "end_utc": _fmt_z(end_utc),
+                    "items": [],
+                })
+                bucket["items"].append({
+                    "datetime_utc": _fmt_z(rec["day"]),
+                    "price": rec["price"],
+                    "currency": rec["currency"],
+                    "unit": rec["unit"],
+                    "resolution": "P1D",
+                })
+        else:
+            qs = base_qs.select_related('country').order_by("country_id", "datetime_utc")
+            for rec in qs:
+                cid = rec.country.pk
+                bucket = results.setdefault(cid, {
+                    "country": cid,
+                    "contract_type": contract,
+                    "start_utc": _fmt_z(start_utc),
+                    "end_utc": _fmt_z(end_utc),
+                    "items": [],
+                })
+                bucket["items"].append({
+                    "datetime_utc": _fmt_z(rec.datetime_utc),
+                    "price": rec.price,
+                    "currency": rec.currency,
+                    "unit": rec.unit,
+                    "resolution": rec.resolution,
+                })
 
         # Ensure empty buckets for countries with no data
         for cid in valid_countries:
@@ -386,6 +416,7 @@ class CountryPricesBulkRangeView(APIView):
                 "countries_requested": country_codes,
                 "countries_found": valid_countries,
                 "contract_type": contract,
+                "resolution": resolution,
                 "start_utc": _fmt_z(start_utc),
                 "end_utc": _fmt_z(end_utc),
                 "total_countries": len(results),
