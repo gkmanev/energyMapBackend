@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
+import time
 from typing import Iterable, Tuple, Dict, List
 
 from django.conf import settings
@@ -26,6 +28,8 @@ from entsoe_api.serializers import (
     CountryGenerationForecastByTypeSerializer,
     PhysicalFlowSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ──────────────────────────────── Utils / Helpers ───────────────────────────────
@@ -319,6 +323,7 @@ class CountryPricesBulkRangeView(APIView):
     MAX_COUNTRIES = 20
 
     def get(self, request):
+        start_perf = time.perf_counter()
         countries_param = request.query_params.get("countries", "")
         contract = (request.query_params.get("contract") or "A01").upper()
         period = request.query_params.get("period")
@@ -440,6 +445,21 @@ class CountryPricesBulkRangeView(APIView):
                 "items": [],
             })
 
+        elapsed_ms = (time.perf_counter() - start_perf) * 1000
+        total_records = sum(len(v["items"]) for v in results.values())
+        logger.info(
+            "bulk price range request complete",
+            extra={
+                "countries": country_codes,
+                "contract": contract,
+                "start_utc": _fmt_z(start_utc),
+                "end_utc": _fmt_z(end_utc),
+                "resolution": "m" if aggregate_monthly else resolution,
+                "total_records": total_records,
+                "elapsed_ms": round(elapsed_ms, 2),
+            },
+        )
+
         return Response({
             "request_info": {
                 "countries_requested": country_codes,
@@ -449,7 +469,8 @@ class CountryPricesBulkRangeView(APIView):
                 "start_utc": _fmt_z(start_utc),
                 "end_utc": _fmt_z(end_utc),
                 "total_countries": len(results),
-                "total_records": sum(len(v["items"]) for v in results.values()),
+                "total_records": total_records,
+                "server_elapsed_ms": round(elapsed_ms, 2),
             },
             "data": results
         }, status=200)
@@ -834,3 +855,4 @@ class PhysicalFlowsLatestView(APIView):
             ]
 
         return Response(payload, status=200)
+logger = logging.getLogger(__name__)
