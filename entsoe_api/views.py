@@ -330,8 +330,9 @@ class CountryPricesBulkRangeView(APIView):
         start_s = request.query_params.get("start")
         end_s = request.query_params.get("end")
         resolution = request.query_params.get("resolution")
-        aggregate_daily = (resolution or "").lower() == "d"
-        aggregate_monthly = _bool_param(request, "m")
+        normalized_resolution = (resolution or "").lower()
+        aggregate_daily = normalized_resolution == "d"
+        aggregate_monthly = normalized_resolution == "m" or _bool_param(request, "m")
 
         country_codes = _split_codes(countries_param)
         if not country_codes:
