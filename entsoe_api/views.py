@@ -7,7 +7,7 @@ from typing import Iterable, Tuple, Dict, List
 from django.conf import settings
 from django.utils.timezone import get_default_timezone
 from django.db.models import Avg, Max, Q
-from django.db.models.functions import TruncDay
+from django.db.models.functions import TruncDay, TruncMonth
 from rest_framework.views import APIView
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -314,6 +314,7 @@ class CountryPricesBulkRangeView(APIView):
     GET /api/prices/bulk-range/?countries=AT,DE,FR&contract=A01&period=today
     GET /api/prices/bulk-range/?countries=AT,DE,FR&contract=A01&start=...&end=...
     GET /api/prices/bulk-range/?countries=AT,DE,FR&contract=A01&start=...&end=...&resolution=d
+    GET /api/prices/bulk-range/?countries=AT,DE,FR&contract=A01&start=...&end=...&m=1
     """
     MAX_COUNTRIES = 20
 
@@ -325,6 +326,7 @@ class CountryPricesBulkRangeView(APIView):
         end_s = request.query_params.get("end")
         resolution = request.query_params.get("resolution")
         aggregate_daily = (resolution or "").lower() == "d"
+        aggregate_monthly = _bool_param(request, "m")
 
         country_codes = _split_codes(countries_param)
         if not country_codes:
@@ -355,7 +357,34 @@ class CountryPricesBulkRangeView(APIView):
         )
 
         results: Dict[str, dict] = {}
-        if aggregate_daily:
+        if aggregate_monthly:
+            qs = (base_qs
+                  .annotate(month=TruncMonth("datetime_utc", tzinfo=dt.timezone.utc))
+                  .values("country_id", "month")
+                  .annotate(
+                      price=Avg("price"),
+                      currency=Max("currency"),
+                      unit=Max("unit"),
+                  )
+                  .order_by("country_id", "month"))
+
+            for rec in qs:
+                cid = rec["country_id"]
+                bucket = results.setdefault(cid, {
+                    "country": cid,
+                    "contract_type": contract,
+                    "start_utc": _fmt_z(start_utc),
+                    "end_utc": _fmt_z(end_utc),
+                    "items": [],
+                })
+                bucket["items"].append({
+                    "datetime_utc": _fmt_z(rec["month"]),
+                    "price": rec["price"],
+                    "currency": rec["currency"],
+                    "unit": rec["unit"],
+                    "resolution": "P1M",
+                })
+        elif aggregate_daily:
             qs = (base_qs
                   .annotate(day=TruncDay("datetime_utc", tzinfo=dt.timezone.utc))
                   .values("country_id", "day")
@@ -416,7 +445,7 @@ class CountryPricesBulkRangeView(APIView):
                 "countries_requested": country_codes,
                 "countries_found": valid_countries,
                 "contract_type": contract,
-                "resolution": resolution,
+                "resolution": "m" if aggregate_monthly else resolution,
                 "start_utc": _fmt_z(start_utc),
                 "end_utc": _fmt_z(end_utc),
                 "total_countries": len(results),
