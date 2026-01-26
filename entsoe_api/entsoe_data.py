@@ -276,9 +276,13 @@ class EntsoeInstalledCapacity:
         full = pd.concat(frames, ignore_index=True, sort=False)
 
         if aggregate_by_country:
-            ok = full.dropna(subset=["installed_capacity_MW", "year"])
+            ok = full.dropna(subset=["installed_capacity_MW", "year"]).copy()
+            ok["installed_capacity_MW"] = pd.to_numeric(
+                ok["installed_capacity_MW"], errors="coerce"
+            )
+            ok = ok.dropna(subset=["installed_capacity_MW"])
             out = (ok.groupby(["country","psr_type","psr_name","year"], as_index=False)["installed_capacity_MW"]
-                     .sum(numeric_only=True)
+                     .sum()
                      .sort_values(["country","psr_type"])
                      .reset_index(drop=True))
             return out
