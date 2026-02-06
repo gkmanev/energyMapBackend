@@ -4,6 +4,7 @@ from .models import (
     Country,
     CountryCapacitySnapshot,
     CountryGenerationByType,
+    CountryResGenerationByType,
     CountryGenerationForecastByType,
     CountryPricePoint,
     PhysicalFlow,
@@ -38,6 +39,22 @@ class CountryGenerationForecastByTypeSerializer(serializers.ModelSerializer):
             "psr_type",
             "psr_name",
             "forecast_mw",
+            "resolution",
+        ]
+
+
+class CountryResGenerationByTypeSerializer(serializers.ModelSerializer):
+    country = serializers.SlugRelatedField(slug_field="iso_code", read_only=True)
+
+    class Meta:
+        model = CountryResGenerationByType
+        fields = [
+            "country",
+            "datetime_utc",
+            "psr_type",
+            "psr_name",
+            "generation_mw",
+            "unit",
             "resolution",
         ]
 

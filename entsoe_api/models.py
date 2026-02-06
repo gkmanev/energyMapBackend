@@ -67,6 +67,33 @@ class CountryGenerationByType(models.Model):
 
 
 
+class CountryResGenerationByType(models.Model):
+    """
+    A69/A01 RES generation (solar/wind) time series aggregated at country level.
+    One row per country - psr_type - timestamp.
+    """
+    country = models.ForeignKey(Country, on_delete=models.PROTECT, related_name="generation_res_country")
+
+    datetime_utc = models.DateTimeField(db_index=True)
+    psr_type = models.CharField(max_length=4)
+    psr_name = models.CharField(max_length=64, blank=True, default="")
+    generation_mw = models.DecimalField(max_digits=14, decimal_places=3, null=True, blank=True)
+
+    unit = models.CharField(max_length=8, blank=True, default="")
+    resolution = models.CharField(max_length=16, blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = (("country", "psr_type", "datetime_utc"),)
+        indexes = [
+            models.Index(fields=["country", "psr_type", "datetime_utc"], name="resgen_country_psr_ts_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.country_id} {self.psr_type} {self.datetime_utc:%Y-%m-%d %H:%MZ} res"
+
+
 class CountryGenerationForecastByType(models.Model):
     """Forecasted generation per production type (A71 / process A01)."""
 
