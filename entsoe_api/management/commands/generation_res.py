@@ -185,6 +185,11 @@ class Command(BaseCommand):
         parser.add_argument("--domain", type=str, help="EIC domain (in_Domain).")
         parser.add_argument("--country", type=str, help="ISO country code, e.g. BG.")
         parser.add_argument(
+            "--all",
+            action="store_true",
+            help="Fetch all countries from settings.ENTSOE_COUNTRY_TO_EICS.",
+        )
+        parser.add_argument(
             "--start",
             type=str,
             help="UTC start ISO, e.g. 2026-02-06T00:00:00Z.",
@@ -218,12 +223,22 @@ class Command(BaseCommand):
 
         domain_opt = (options.get("domain") or "").strip()
         country_opt = (options.get("country") or "").strip().upper()
+        use_all = bool(options.get("all"))
 
         mapping = getattr(settings, "ENTSOE_COUNTRY_TO_EICS", None)
         if not isinstance(mapping, dict):
             mapping = {}
 
-        if domain_opt:
+        if use_all and (domain_opt or country_opt):
+            raise CommandError("Use --all by itself (do not combine with --domain or --country).")
+
+        if use_all:
+            if not mapping:
+                raise CommandError("settings.ENTSOE_COUNTRY_TO_EICS is missing or empty.")
+            domains = []
+            for eics in mapping.values():
+                domains.extend(list(_iter_eics(eics)))
+        elif domain_opt:
             domains = [domain_opt]
         elif country_opt:
             if country_opt not in mapping:
@@ -252,12 +267,17 @@ class Command(BaseCommand):
             if start >= end:
                 raise CommandError("--start must be earlier than --end.")
         else:
-            hours = options.get("hours")
-            if not hours or hours <= 0:
-                raise CommandError("--hours must be > 0.")
-            now_utc = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
-            end = _floor_to_hour(now_utc) + dt.timedelta(hours=1)
-            start = end - dt.timedelta(hours=hours)
+            if use_all:
+                now_utc = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
+                start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+                end = start + dt.timedelta(days=1)
+            else:
+                hours = options.get("hours")
+                if not hours or hours <= 0:
+                    raise CommandError("--hours must be > 0.")
+                now_utc = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
+                end = _floor_to_hour(now_utc) + dt.timedelta(hours=1)
+                start = end - dt.timedelta(hours=hours)
 
         psr_types = {s.strip() for s in (options.get("psr_types") or "").split(",") if s.strip()}
         if not psr_types:
