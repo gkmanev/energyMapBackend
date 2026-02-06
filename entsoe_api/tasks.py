@@ -55,6 +55,14 @@ def fetch_generation_daily_task(self):
 
 
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def fetch_generation_res_daily_task(self):
+    tz = ZoneInfo("Europe/Sofia")
+    start_utc, end_utc = _local_daily_window(tz)
+    logger.info("Daily RES generation window: %s -> %s", start_utc, end_utc)
+    call_command("generation_res", all=True, start=start_utc, end=end_utc)
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
 def fetch_generation_forecast_hourly_task(self):
     """Fetch rolling generation forecasts every hour."""
     start_iso, end_iso = _local_daily_window(ZoneInfo("Europe/Sofia"))

@@ -146,6 +146,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "entsoe_api.tasks.fetch_generation_forecast_hourly_task",
         "schedule": crontab(minute=0),
     },
+    "fetch_generation_res_daily": {
+        "task": "entsoe_api.tasks.fetch_generation_res_daily_task",
+        "schedule": crontab(hour=1, minute=0),
+    },
     "fetch_generation_hourly": {
         "task": "entsoe_api.tasks.fetch_generation_hourly_task",
         "schedule": crontab(minute=5),
