@@ -6,6 +6,7 @@ from .models import (
     Country,
     CountryCapacitySnapshot,
     CountryGenerationByType,
+    CountryResGenerationByType,
     CountryGenerationForecastByType,
     CountryPricePoint,
     PhysicalFlow,
@@ -113,6 +114,60 @@ def save_generation_forecast_df(df) -> int:
             "resolution": r.get("resolution") or "",
         }
         CountryGenerationForecastByType.objects.update_or_create(
+            country=c,
+            psr_type=r["psr_type"],
+            datetime_utc=r["datetime_utc"],
+            defaults=defaults,
+        )
+        n += 1
+    return n
+
+@transaction.atomic
+def save_generation_res_df(df) -> int:
+    """
+    Persist RES generation rows (A69).
+
+    Expected columns:
+      - datetime_utc
+      - psr_type
+      - generation_mw or generation_MW
+    Optional:
+      - psr_name, unit, resolution, country (ISO), zone (EIC)
+    """
+    if df is None or df.empty:
+        return 0
+
+    df = df.copy()
+    if "generation_mw" not in df.columns and "generation_MW" in df.columns:
+        df.rename(columns={"generation_MW": "generation_mw"}, inplace=True)
+
+    required = {"datetime_utc", "psr_type", "generation_mw"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing columns {missing} for CountryResGenerationByType")
+
+    if "country" not in df.columns:
+        if "zone" not in df.columns:
+            raise ValueError("Missing 'country' or 'zone' column for CountryResGenerationByType")
+        eic_to_iso = _eic_to_country_iso_map()
+        df["country"] = df["zone"].map(lambda z: eic_to_iso.get(str(z).strip()) if z else None)
+
+    df = df[df["country"].notna()]
+    if df.empty:
+        return 0
+
+    df["datetime_utc"] = df["datetime_utc"].apply(_ensure_aware_utc)
+
+    n = 0
+    for r in df.to_dict(orient="records"):
+        c = _get_or_create_country(r["country"])
+        defaults = {
+            "psr_name": r.get("psr_name") or r["psr_type"],
+            "generation_mw": r.get("generation_mw"),
+            "unit": r.get("unit") or "",
+            "resolution": r.get("resolution") or "",
+        }
+        CountryResGenerationByType.objects.update_or_create(
             country=c,
             psr_type=r["psr_type"],
             datetime_utc=r["datetime_utc"],

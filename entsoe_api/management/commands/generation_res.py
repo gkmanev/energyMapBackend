@@ -5,11 +5,13 @@ from typing import Iterable, List, Optional, Set
 from xml.etree import ElementTree as ET
 
 import requests
+import pandas as pd
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from dotenv import load_dotenv
 
 from entsoe_api.entsoe_data import BASE_URL, PSRTYPE_MAPPINGS
+from entsoe_api.helper import save_generation_res_df
 
 load_dotenv()
 
@@ -289,6 +291,10 @@ class Command(BaseCommand):
         if not all_records:
             self.stdout.write(self.style.WARNING("No data returned."))
             return
+
+        df = pd.DataFrame.from_records(all_records)
+        written = save_generation_res_df(df)
+        self.stdout.write(self.style.SUCCESS(f"Saved {written} RES generation rows."))
 
         for rec in all_records:
             ts = rec.get("datetime_utc")
