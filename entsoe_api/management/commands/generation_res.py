@@ -301,11 +301,25 @@ class Command(BaseCommand):
                 resp = requests.get(BASE_URL, params=params, timeout=60)
                 resp.raise_for_status()
             except requests.HTTPError as e:
+                if use_all:
+                    self.stdout.write(self.style.WARNING(
+                        f"Skipping {domain} due to HTTP error: {e} (status {resp.status_code})"
+                    ))
+                    continue
                 raise CommandError(f"HTTP error from ENTSOE: {e} (status {resp.status_code})")
             except requests.RequestException as e:
+                if use_all:
+                    self.stdout.write(self.style.WARNING(f"Skipping {domain} due to network error: {e}"))
+                    continue
                 raise CommandError(f"Network error from ENTSOE: {e}")
 
-            records = _parse_a69(resp.text, domain, psr_types)
+            try:
+                records = _parse_a69(resp.text, domain, psr_types)
+            except RuntimeError as e:
+                if use_all:
+                    self.stdout.write(self.style.WARNING(f"Skipping {domain} due to API error: {e}"))
+                    continue
+                raise
             all_records.extend(records)
 
         if not all_records:
