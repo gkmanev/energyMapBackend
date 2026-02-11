@@ -92,10 +92,15 @@ def _get_country_or_400(country_iso: str) -> Country:
     except Country.DoesNotExist:
         raise ValueError(f"Unknown country '{iso}'. Make sure it's loaded in the DB.")
 
+def _partition_country_codes(codes: Iterable[str]) -> Tuple[List[str], List[str]]:
+    requested_codes = sorted({c.upper() for c in codes if c})
+    valid = list(Country.objects.filter(pk__in=requested_codes).values_list("pk", flat=True))
+    missing = sorted(set(requested_codes) - set(valid))
+    return valid, missing
+
+
 def _validate_countries_or_400(codes: Iterable[str]) -> List[str]:
-    codes = list({c.upper() for c in codes if c})
-    valid = list(Country.objects.filter(pk__in=codes).values_list("pk", flat=True))
-    missing = sorted(set(codes) - set(valid))
+    valid, missing = _partition_country_codes(codes)
     if missing:
         raise ValueError(f"Unknown countries: {', '.join(missing)}")
     return valid
@@ -372,10 +377,9 @@ class CountryPricesBulkRangeView(APIView):
         if start_utc >= end_utc:
             return Response({"detail": "start must be earlier than end."}, status=400)
 
-        try:
-            valid_countries = _validate_countries_or_400(country_codes)
-        except ValueError as e:
-            return Response({"detail": str(e)}, status=400)
+        valid_countries, missing_countries = _partition_country_codes(country_codes)
+        if not valid_countries:
+            return Response({"detail": f"Unknown countries: {', '.join(missing_countries)}"}, status=400)
 
         base_qs = CountryPricePoint.objects.filter(
             country_id__in=valid_countries,
@@ -487,6 +491,7 @@ class CountryPricesBulkRangeView(APIView):
             "request_info": {
                 "countries_requested": country_codes,
                 "countries_found": valid_countries,
+                "countries_ignored": missing_countries,
                 "contract_type": contract,
                 "resolution": "m" if aggregate_monthly else resolution,
                 "start_utc": _fmt_z(start_utc),
@@ -702,10 +707,9 @@ class CountryGenerationBulkRangeView(APIView):
         if start_utc >= end_utc:
             return Response({"detail": "start must be earlier than end."}, status=400)
 
-        try:
-            valid_countries = _validate_countries_or_400(country_codes)
-        except ValueError as e:
-            return Response({"detail": str(e)}, status=400)
+        valid_countries, missing_countries = _partition_country_codes(country_codes)
+        if not valid_countries:
+            return Response({"detail": f"Unknown countries: {', '.join(missing_countries)}"}, status=400)
 
         qs = (
             CountryGenerationByType.objects
@@ -749,6 +753,7 @@ class CountryGenerationBulkRangeView(APIView):
                 "request_info": {
                     "countries_requested": country_codes,
                     "countries_found": valid_countries,
+                "countries_ignored": missing_countries,
                     "psr": psr,
                     "start_utc": _fmt_z(start_utc),
                     "end_utc": _fmt_z(end_utc),

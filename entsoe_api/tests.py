@@ -1,10 +1,11 @@
 import datetime as dt
+from unittest.mock import patch
 
 import pandas as pd
 from django.test import SimpleTestCase
 
 from entsoe_api.entsoe_data import EntsoeGenerationForecastByType
-from entsoe_api.views import _parse_iso_utc_floor_hour
+from entsoe_api.views import _parse_iso_utc_floor_hour, _partition_country_codes
 
 
 class GenerationForecastHelpersTest(SimpleTestCase):
@@ -38,3 +39,23 @@ class ParseIsoUtcFloorHourTest(SimpleTestCase):
     def test_invalid_values_raise_value_error(self):
         with self.assertRaises(ValueError):
             _parse_iso_utc_floor_hour("not-a-date")
+
+
+class PartitionCountryCodesTest(SimpleTestCase):
+    @patch("entsoe_api.views.Country.objects.filter")
+    def test_partitions_valid_and_missing_country_codes(self, mock_filter):
+        mock_filter.return_value.values_list.return_value = ["CH", "SE"]
+
+        valid, missing = _partition_country_codes(["GB", "CH", "UA", "SE"])
+
+        self.assertEqual(valid, ["CH", "SE"])
+        self.assertEqual(missing, ["GB", "UA"])
+
+    @patch("entsoe_api.views.Country.objects.filter")
+    def test_returns_empty_valid_when_all_countries_are_unknown(self, mock_filter):
+        mock_filter.return_value.values_list.return_value = []
+
+        valid, missing = _partition_country_codes(["GB", "UA"])
+
+        self.assertEqual(valid, [])
+        self.assertEqual(missing, ["GB", "UA"])
