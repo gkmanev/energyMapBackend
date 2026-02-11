@@ -4,10 +4,12 @@ import os
 import json
 import time
 import datetime as dt
+import warnings
 from typing import Dict, List, Union, Optional
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
+from django.utils import timezone
 
 import pandas as pd
 
@@ -20,6 +22,9 @@ from entsoe_api.entsoe_data import EntsoeGenerationByType
 from dotenv import load_dotenv
 from entsoe_api.helper import save_generation_df
 load_dotenv()
+
+# Suppress Django timezone warnings since we handle timezone conversion
+warnings.filterwarnings('ignore', category=RuntimeWarning, module='django.db.models.fields')
 
 
 def _parse_iso_utc(s: str) -> dt.datetime:
@@ -41,6 +46,32 @@ def _parse_iso_utc(s: str) -> dt.datetime:
 def _floor_to_step(d: dt.datetime, minutes: int = 60) -> dt.datetime:
     d = d.astimezone(dt.timezone.utc).replace(second=0, microsecond=0)
     return d - dt.timedelta(minutes=d.minute % minutes)
+
+
+def _ensure_timezone_aware(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ensure all datetime columns in the DataFrame are timezone-aware (UTC).
+    This prevents Django warnings about naive datetimes.
+    """
+    if df.empty:
+        return df
+    
+    # Make a copy to avoid modifying the original
+    df = df.copy()
+    
+    # Find all datetime columns
+    datetime_cols = df.select_dtypes(include=['datetime64']).columns
+    
+    for col in datetime_cols:
+        # Check if the column has timezone info
+        if df[col].dt.tz is None:
+            # Convert to UTC timezone
+            df[col] = pd.to_datetime(df[col]).dt.tz_localize('UTC')
+        else:
+            # If already timezone-aware, convert to UTC
+            df[col] = df[col].dt.tz_convert('UTC')
+    
+    return df
 
 
 class Command(BaseCommand):
@@ -250,6 +281,9 @@ class Command(BaseCommand):
             if df is not None and not df.empty:
                 rows_retrieved = len(df)
                 total_rows_retrieved += rows_retrieved
+                
+                # Ensure timezone-aware datetimes before saving
+                df = _ensure_timezone_aware(df)
                 
                 # Save to database immediately (batch save per country)
                 try:
