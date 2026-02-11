@@ -225,10 +225,12 @@ class Command(BaseCommand):
         self.stdout.write("")
 
         # --- fetch country by country with rate limiting ---
-        all_dfs = []
+        all_dfs = []  # Only used if output file is requested
         total_countries = len(country_to_eics)
         successful = 0
         failed = 0
+        total_rows_retrieved = 0
+        total_rows_saved = 0
         start_time = time.time()
 
         for idx, (country, eics) in enumerate(sorted(country_to_eics.items()), 1):
@@ -246,11 +248,29 @@ class Command(BaseCommand):
             )
             
             if df is not None and not df.empty:
-                all_dfs.append(df)
-                successful += 1
-                self.stdout.write(
-                    self.style.SUCCESS(f"  ✅ {country}: Retrieved {len(df)} rows")
-                )
+                rows_retrieved = len(df)
+                total_rows_retrieved += rows_retrieved
+                
+                # Save to database immediately (batch save per country)
+                try:
+                    written = save_generation_df(df)
+                    total_rows_saved += written
+                    successful += 1
+                    self.stdout.write(
+                        self.style.SUCCESS(f"  ✅ {country}: Retrieved {rows_retrieved} rows, saved {written} to DB")
+                    )
+                except Exception as e:
+                    failed += 1
+                    self.stdout.write(
+                        self.style.ERROR(f"  ❌ {country}: Retrieved {rows_retrieved} rows but failed to save: {str(e)[:100]}")
+                    )
+                    if not continue_on_error:
+                        raise CommandError(f"Failed to save data for {country}: {e}")
+                
+                # Keep in memory only if we need to output to file
+                if options.get("output"):
+                    all_dfs.append(df)
+                    
             elif df is not None and df.empty:
                 self.stdout.write(
                     self.style.WARNING(f"  ⚠️  {country}: No data available")
@@ -269,7 +289,7 @@ class Command(BaseCommand):
 
         elapsed_time = time.time() - start_time
 
-        # --- Combine all dataframes ---
+        # --- Combine all dataframes (only needed for file output) ---
         if all_dfs:
             df = pd.concat(all_dfs, ignore_index=True)
         else:
@@ -282,22 +302,11 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS("=" * 70))
         self.stdout.write(f"✅ Successful: {successful}/{total_countries}")
         self.stdout.write(f"❌ Failed: {failed}/{total_countries}")
-        self.stdout.write(f"📊 Total rows retrieved: {len(df)}")
+        self.stdout.write(f"📊 Total rows retrieved: {total_rows_retrieved}")
+        self.stdout.write(f"💾 Total rows saved to DB: {total_rows_saved}")
         self.stdout.write(f"⏱️  Total time: {elapsed_time:.2f}s")
         self.stdout.write(self.style.SUCCESS("=" * 70))
         self.stdout.write("")
-
-        # --- Save to database ---
-        if not df.empty:
-            try:
-                written = save_generation_df(df)
-                self.stdout.write(self.style.SUCCESS(f"💾 Saved {written} generation rows to database."))
-            except Exception as e:
-                self.stdout.write(self.style.ERROR(f"❌ Failed to save to database: {e}"))
-                if not continue_on_error:
-                    raise
-        else:
-            self.stdout.write(self.style.WARNING("⚠️  No data to save."))
 
         # --- output to file/stdout ---
         out_fmt = options["format"]
