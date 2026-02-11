@@ -2,6 +2,7 @@
 
 import os
 import json
+import time
 import datetime as dt
 from typing import Dict, List, Union, Optional
 
@@ -46,7 +47,8 @@ class Command(BaseCommand):
     help = (
         "Fetch ENTSO-E Actual Generation per Production Type (A75/A16) "
         "for one country (--country ISO) or all countries (default). "
-        "Auto-aligns time window to 15-minute MTU boundaries."
+        "Auto-aligns time window to 15-minute MTU boundaries. "
+        "Includes rate limiting to prevent API flooding."
     )
 
     def add_arguments(self, parser):
@@ -93,12 +95,74 @@ class Command(BaseCommand):
             type=str,
             help="If provided, write output to this file; otherwise print to stdout.",
         )
+        parser.add_argument(
+            "--delay",
+            type=float,
+            default=1.0,
+            help="Delay in seconds between country requests (default: 1.0). Set to 0 to disable.",
+        )
+        parser.add_argument(
+            "--max-retries",
+            type=int,
+            default=3,
+            help="Maximum number of retries per country on failure (default: 3).",
+        )
+        parser.add_argument(
+            "--continue-on-error",
+            action="store_true",
+            help="Continue processing other countries even if one fails.",
+        )
+
+    def fetch_country_with_retry(
+        self,
+        country: str,
+        eics: Union[str, List[str]],
+        api_key: str,
+        start: dt.datetime,
+        end: dt.datetime,
+        psr_type: Optional[str],
+        aggregate: bool,
+        max_retries: int,
+    ) -> Optional[pd.DataFrame]:
+        """
+        Fetch data for a single country with exponential backoff retry logic.
+        """
+        for attempt in range(max_retries):
+            try:
+                df = EntsoeGenerationByType.query_all_countries(
+                    api_key=api_key,
+                    country_to_eics={country: eics},
+                    start=start,
+                    end=end,
+                    psr_type=psr_type,
+                    aggregate_by_country=aggregate,
+                    skip_errors=True,
+                )
+                return df
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"  ⚠️  Attempt {attempt + 1}/{max_retries} failed for {country}: {str(e)[:100]}"
+                        )
+                    )
+                    self.stdout.write(f"  ⏳ Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    self.stdout.write(
+                        self.style.ERROR(
+                            f"  ❌ All {max_retries} attempts failed for {country}: {str(e)[:100]}"
+                        )
+                    )
+                    return None
+        return None
 
     def handle(self, *args, **options):
         # --- API key ---
         api_key = os.getenv("ENTSOE_TOKEN")
         if not api_key:
-            raise CommandError("Missing ENTSOE_API_KEY. Put it in settings.ENTSOE_API_KEY or env ENTSOE_API_KEY.")
+            raise CommandError("Missing ENTSOE_TOKEN. Put it in .env file or export ENTSOE_TOKEN=your_key")
 
         # --- mapping ---
         mapping = getattr(settings, "ENTSOE_COUNTRY_TO_EICS", None)
@@ -117,6 +181,9 @@ class Command(BaseCommand):
 
         psr_type = options.get("psr_type")
         aggregate = not options.get("no_aggregate")
+        delay = options.get("delay", 1.0)
+        max_retries = options.get("max_retries", 3)
+        continue_on_error = options.get("continue_on_error", False)
 
         # --- time window (auto-align to 15-min MTU) ---
         start_opt = options.get("start")
@@ -143,39 +210,117 @@ class Command(BaseCommand):
             end = now_utc.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)  # exclusive
             start = end - dt.timedelta(hours=hours)
 
-        # --- fetch ---
-        df = EntsoeGenerationByType.query_all_countries(
-            api_key=api_key,
-            country_to_eics=country_to_eics,
-            start=start,
-            end=end,
-            psr_type=psr_type,
-            aggregate_by_country=aggregate,
-            skip_errors=True,
-        )
-        written = save_generation_df(df)
-        self.stdout.write(self.style.SUCCESS(f"Saved {written} generation rows."))
+        # --- Display configuration ---
+        self.stdout.write(self.style.SUCCESS("=" * 70))
+        self.stdout.write(self.style.SUCCESS("ENTSO-E Generation Data Fetch"))
+        self.stdout.write(self.style.SUCCESS("=" * 70))
+        self.stdout.write(f"📅 Time Range: {start} to {end}")
+        self.stdout.write(f"🌍 Countries: {len(country_to_eics)} ({', '.join(sorted(country_to_eics.keys()))})")
+        if psr_type:
+            self.stdout.write(f"⚡ PSR Type Filter: {psr_type}")
+        self.stdout.write(f"📊 Aggregate by country: {aggregate}")
+        self.stdout.write(f"⏱️  Delay between requests: {delay}s")
+        self.stdout.write(f"🔄 Max retries: {max_retries}")
+        self.stdout.write(self.style.SUCCESS("=" * 70))
+        self.stdout.write("")
 
-        if df.empty:
-            self.stdout.write(self.style.WARNING("No data returned."))
-            return
+        # --- fetch country by country with rate limiting ---
+        all_dfs = []
+        total_countries = len(country_to_eics)
+        successful = 0
+        failed = 0
+        start_time = time.time()
 
-        # --- output ---
+        for idx, (country, eics) in enumerate(sorted(country_to_eics.items()), 1):
+            self.stdout.write(f"[{idx}/{total_countries}] Fetching {country}...")
+            
+            df = self.fetch_country_with_retry(
+                country=country,
+                eics=eics,
+                api_key=api_key,
+                start=start,
+                end=end,
+                psr_type=psr_type,
+                aggregate=aggregate,
+                max_retries=max_retries,
+            )
+            
+            if df is not None and not df.empty:
+                all_dfs.append(df)
+                successful += 1
+                self.stdout.write(
+                    self.style.SUCCESS(f"  ✅ {country}: Retrieved {len(df)} rows")
+                )
+            elif df is not None and df.empty:
+                self.stdout.write(
+                    self.style.WARNING(f"  ⚠️  {country}: No data available")
+                )
+            else:
+                failed += 1
+                if not continue_on_error:
+                    raise CommandError(f"Failed to fetch data for {country}. Use --continue-on-error to skip failed countries.")
+                self.stdout.write(
+                    self.style.ERROR(f"  ❌ {country}: Failed (continuing...)")
+                )
+            
+            # Rate limiting: wait between countries (except after the last one)
+            if idx < total_countries and delay > 0:
+                time.sleep(delay)
+
+        elapsed_time = time.time() - start_time
+
+        # --- Combine all dataframes ---
+        if all_dfs:
+            df = pd.concat(all_dfs, ignore_index=True)
+        else:
+            df = pd.DataFrame()
+
+        # --- Summary ---
+        self.stdout.write("")
+        self.stdout.write(self.style.SUCCESS("=" * 70))
+        self.stdout.write(self.style.SUCCESS("FETCH SUMMARY"))
+        self.stdout.write(self.style.SUCCESS("=" * 70))
+        self.stdout.write(f"✅ Successful: {successful}/{total_countries}")
+        self.stdout.write(f"❌ Failed: {failed}/{total_countries}")
+        self.stdout.write(f"📊 Total rows retrieved: {len(df)}")
+        self.stdout.write(f"⏱️  Total time: {elapsed_time:.2f}s")
+        self.stdout.write(self.style.SUCCESS("=" * 70))
+        self.stdout.write("")
+
+        # --- Save to database ---
+        if not df.empty:
+            try:
+                written = save_generation_df(df)
+                self.stdout.write(self.style.SUCCESS(f"💾 Saved {written} generation rows to database."))
+            except Exception as e:
+                self.stdout.write(self.style.ERROR(f"❌ Failed to save to database: {e}"))
+                if not continue_on_error:
+                    raise
+        else:
+            self.stdout.write(self.style.WARNING("⚠️  No data to save."))
+
+        # --- output to file/stdout ---
         out_fmt = options["format"]
         out_path = options.get("output")
 
-        if out_fmt == "json":
-            records = EntsoeGenerationByType.to_records(df, datetime_cols=["datetime_utc"])
-            payload = json.dumps(records, ensure_ascii=False, indent=2)
-            if out_path:
-                with open(out_path, "w", encoding="utf-8") as f:
-                    f.write(payload)
-                self.stdout.write(self.style.SUCCESS(f"Wrote JSON to {out_path}"))
-            else:
+        if not df.empty and out_path:
+            try:
+                if out_fmt == "json":
+                    records = EntsoeGenerationByType.to_records(df, datetime_cols=["datetime_utc"])
+                    payload = json.dumps(records, ensure_ascii=False, indent=2)
+                    with open(out_path, "w", encoding="utf-8") as f:
+                        f.write(payload)
+                    self.stdout.write(self.style.SUCCESS(f"📄 Wrote JSON to {out_path}"))
+                else:  # csv
+                    df.to_csv(out_path, index=False)
+                    self.stdout.write(self.style.SUCCESS(f"📄 Wrote CSV to {out_path}"))
+            except Exception as e:
+                self.stdout.write(self.style.ERROR(f"❌ Failed to write output file: {e}"))
+        elif not df.empty and not out_path:
+            # Print to stdout only if no output file specified
+            if out_fmt == "json":
+                records = EntsoeGenerationByType.to_records(df, datetime_cols=["datetime_utc"])
+                payload = json.dumps(records, ensure_ascii=False, indent=2)
                 self.stdout.write(payload)
-        else:  # csv
-            if out_path:
-                df.to_csv(out_path, index=False)
-                self.stdout.write(self.style.SUCCESS(f"Wrote CSV to {out_path}"))
-            else:
+            else:  # csv
                 self.stdout.write(df.to_csv(index=False))
