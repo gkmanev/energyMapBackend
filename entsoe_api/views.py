@@ -7,6 +7,7 @@ import time
 from typing import Iterable, Tuple, Dict, List
 
 from django.conf import settings
+from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.timezone import get_default_timezone
 from django.db.models import Avg, Max, Q
 from django.db.models.functions import TruncDay, TruncMonth
@@ -55,9 +56,27 @@ def _floor_15min(d: dt.datetime) -> dt.datetime:
     return d - dt.timedelta(minutes=d.minute % 15)
 
 def _parse_iso_utc_floor_hour(s: str) -> dt.datetime:
-    """Parse 'YYYY-MM-DDTHH:MM:SSZ' / ISO and floor to hour in UTC."""
-    s2 = (s or "").rstrip("Z")
-    d = dt.datetime.fromisoformat(s2)
+    """Parse ISO datetime/date and floor to hour in UTC."""
+    raw_value = (s or "").strip()
+
+    if not raw_value:
+        raise ValueError("Datetime value cannot be empty.")
+
+    d = parse_datetime(raw_value)
+    if d is None and raw_value.endswith("Z"):
+        # Keep compatibility with clients that send UTC values with trailing Z.
+        d = parse_datetime(raw_value.replace("Z", "+00:00"))
+
+    if d is None:
+        parsed_date = parse_date(raw_value)
+        if parsed_date is not None:
+            d = dt.datetime.combine(parsed_date, dt.time.min, tzinfo=dt.timezone.utc)
+
+    if d is None:
+        raise ValueError(
+            f"Invalid datetime '{raw_value}'. Use ISO datetime (e.g. 2026-02-11T22:00:00Z) or date (YYYY-MM-DD)."
+        )
+
     return _utc_floor_hour(d)
 
 def _bool_param(request, key: str) -> bool:
