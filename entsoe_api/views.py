@@ -7,6 +7,7 @@ import time
 from typing import Iterable, Tuple, Dict, List
 
 from django.conf import settings
+from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.timezone import get_default_timezone
 from django.db.models import Avg, Max, Q
 from django.db.models.functions import TruncDay, TruncMonth
@@ -55,9 +56,27 @@ def _floor_15min(d: dt.datetime) -> dt.datetime:
     return d - dt.timedelta(minutes=d.minute % 15)
 
 def _parse_iso_utc_floor_hour(s: str) -> dt.datetime:
-    """Parse 'YYYY-MM-DDTHH:MM:SSZ' / ISO and floor to hour in UTC."""
-    s2 = (s or "").rstrip("Z")
-    d = dt.datetime.fromisoformat(s2)
+    """Parse ISO datetime/date and floor to hour in UTC."""
+    raw_value = (s or "").strip()
+
+    if not raw_value:
+        raise ValueError("Datetime value cannot be empty.")
+
+    d = parse_datetime(raw_value)
+    if d is None and raw_value.endswith("Z"):
+        # Keep compatibility with clients that send UTC values with trailing Z.
+        d = parse_datetime(raw_value.replace("Z", "+00:00"))
+
+    if d is None:
+        parsed_date = parse_date(raw_value)
+        if parsed_date is not None:
+            d = dt.datetime.combine(parsed_date, dt.time.min, tzinfo=dt.timezone.utc)
+
+    if d is None:
+        raise ValueError(
+            f"Invalid datetime '{raw_value}'. Use ISO datetime (e.g. 2026-02-11T22:00:00Z) or date (YYYY-MM-DD)."
+        )
+
     return _utc_floor_hour(d)
 
 def _bool_param(request, key: str) -> bool:
@@ -73,10 +92,15 @@ def _get_country_or_400(country_iso: str) -> Country:
     except Country.DoesNotExist:
         raise ValueError(f"Unknown country '{iso}'. Make sure it's loaded in the DB.")
 
+def _partition_country_codes(codes: Iterable[str]) -> Tuple[List[str], List[str]]:
+    requested_codes = sorted({c.upper() for c in codes if c})
+    valid = list(Country.objects.filter(pk__in=requested_codes).values_list("pk", flat=True))
+    missing = sorted(set(requested_codes) - set(valid))
+    return valid, missing
+
+
 def _validate_countries_or_400(codes: Iterable[str]) -> List[str]:
-    codes = list({c.upper() for c in codes if c})
-    valid = list(Country.objects.filter(pk__in=codes).values_list("pk", flat=True))
-    missing = sorted(set(codes) - set(valid))
+    valid, missing = _partition_country_codes(codes)
     if missing:
         raise ValueError(f"Unknown countries: {', '.join(missing)}")
     return valid
@@ -353,10 +377,9 @@ class CountryPricesBulkRangeView(APIView):
         if start_utc >= end_utc:
             return Response({"detail": "start must be earlier than end."}, status=400)
 
-        try:
-            valid_countries = _validate_countries_or_400(country_codes)
-        except ValueError as e:
-            return Response({"detail": str(e)}, status=400)
+        valid_countries, missing_countries = _partition_country_codes(country_codes)
+        if not valid_countries:
+            return Response({"detail": f"Unknown countries: {', '.join(missing_countries)}"}, status=400)
 
         base_qs = CountryPricePoint.objects.filter(
             country_id__in=valid_countries,
@@ -468,6 +491,7 @@ class CountryPricesBulkRangeView(APIView):
             "request_info": {
                 "countries_requested": country_codes,
                 "countries_found": valid_countries,
+                "countries_ignored": missing_countries,
                 "contract_type": contract,
                 "resolution": "m" if aggregate_monthly else resolution,
                 "start_utc": _fmt_z(start_utc),
@@ -683,10 +707,9 @@ class CountryGenerationBulkRangeView(APIView):
         if start_utc >= end_utc:
             return Response({"detail": "start must be earlier than end."}, status=400)
 
-        try:
-            valid_countries = _validate_countries_or_400(country_codes)
-        except ValueError as e:
-            return Response({"detail": str(e)}, status=400)
+        valid_countries, missing_countries = _partition_country_codes(country_codes)
+        if not valid_countries:
+            return Response({"detail": f"Unknown countries: {', '.join(missing_countries)}"}, status=400)
 
         qs = (
             CountryGenerationByType.objects
@@ -730,6 +753,7 @@ class CountryGenerationBulkRangeView(APIView):
                 "request_info": {
                     "countries_requested": country_codes,
                     "countries_found": valid_countries,
+                "countries_ignored": missing_countries,
                     "psr": psr,
                     "start_utc": _fmt_z(start_utc),
                     "end_utc": _fmt_z(end_utc),
