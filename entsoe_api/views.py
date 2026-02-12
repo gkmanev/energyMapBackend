@@ -511,6 +511,8 @@ class CountryGenerationRangeView(APIView):
     GET /api/generation/range/?country=CZ[&psr=B16][&local=1]
     GET /api/generation/range/?country=CZ&period=today|yesterday[&psr=B16][&local=1]
     GET /api/generation/range/?country=CZ&start=...&end=...[&psr=B16]
+    GET /api/generation/range/?country=CZ&start=...&end=...[&psr=B16]&resolution=d
+    GET /api/generation/range/?country=CZ&start=...&end=...[&psr=B16]&resolution=m
     """
     def get(self, request):
         country_q = request.query_params.get("country", "")
@@ -519,6 +521,10 @@ class CountryGenerationRangeView(APIView):
         period = request.query_params.get("period")
         start_s = request.query_params.get("start")
         end_s = request.query_params.get("end")
+        resolution = request.query_params.get("resolution")
+        normalized_resolution = (resolution or "").lower()
+        aggregate_daily = normalized_resolution == "d"
+        aggregate_monthly = normalized_resolution == "m" or _bool_param(request, "m")
 
         try:
             country = _get_country_or_400(country_q)
@@ -546,16 +552,54 @@ class CountryGenerationRangeView(APIView):
         if psr:
             qs = qs.filter(psr_type=psr)
 
-        rows = qs.order_by("datetime_utc", "psr_type").values(
-            "datetime_utc", "psr_type", "psr_name", "generation_mw"
-        )
+        if aggregate_monthly:
+            rows = (
+                qs.annotate(month=TruncMonth("datetime_utc", tzinfo=dt.timezone.utc))
+                .values("month", "psr_type")
+                .annotate(
+                    psr_name=Max("psr_name"),
+                    generation_mw=Avg("generation_mw"),
+                )
+                .order_by("month", "psr_type")
+            )
 
-        items = [{
-            "datetime_utc": _fmt_z(r["datetime_utc"]),
-            "psr_type": r["psr_type"],
-            "psr_name": r["psr_name"] or r["psr_type"],
-            "generation_mw": r["generation_mw"],
-        } for r in rows]
+            items = [{
+                "datetime_utc": _fmt_z(r["month"]),
+                "psr_type": r["psr_type"],
+                "psr_name": r["psr_name"] or r["psr_type"],
+                "generation_mw": r["generation_mw"],
+                "resolution": "P1M",
+            } for r in rows]
+        elif aggregate_daily:
+            rows = (
+                qs.annotate(day=TruncDay("datetime_utc", tzinfo=dt.timezone.utc))
+                .values("day", "psr_type")
+                .annotate(
+                    psr_name=Max("psr_name"),
+                    generation_mw=Avg("generation_mw"),
+                )
+                .order_by("day", "psr_type")
+            )
+
+            items = [{
+                "datetime_utc": _fmt_z(r["day"]),
+                "psr_type": r["psr_type"],
+                "psr_name": r["psr_name"] or r["psr_type"],
+                "generation_mw": r["generation_mw"],
+                "resolution": "P1D",
+            } for r in rows]
+        else:
+            rows = qs.order_by("datetime_utc", "psr_type").values(
+                "datetime_utc", "psr_type", "psr_name", "generation_mw", "resolution"
+            )
+
+            items = [{
+                "datetime_utc": _fmt_z(r["datetime_utc"]),
+                "psr_type": r["psr_type"],
+                "psr_name": r["psr_name"] or r["psr_type"],
+                "generation_mw": r["generation_mw"],
+                "resolution": r["resolution"],
+            } for r in rows]
 
         return Response({
             "country": country.pk,
@@ -677,6 +721,8 @@ class CountryGenerationBulkRangeView(APIView):
     GET /api/generation/bulk-range/?countries=AT,DE,FR[&psr=B16][&local=1]
     GET /api/generation/bulk-range/?countries=AT,DE,FR&period=today|yesterday[&psr=B16][&local=1]
     GET /api/generation/bulk-range/?countries=AT,DE,FR&start=...&end=...[&psr=B16][&local=1]
+    GET /api/generation/bulk-range/?countries=AT,DE,FR&start=...&end=...[&psr=B16]&resolution=d
+    GET /api/generation/bulk-range/?countries=AT,DE,FR&start=...&end=...[&psr=B16]&resolution=m
     """
     MAX_COUNTRIES = 20
 
@@ -687,6 +733,10 @@ class CountryGenerationBulkRangeView(APIView):
         period = request.query_params.get("period")
         start_s = request.query_params.get("start")
         end_s = request.query_params.get("end")
+        resolution = request.query_params.get("resolution")
+        normalized_resolution = (resolution or "").lower()
+        aggregate_daily = normalized_resolution == "d"
+        aggregate_monthly = normalized_resolution == "m" or _bool_param(request, "m")
 
         country_codes = _split_codes(countries_param)
         if not country_codes:
@@ -711,7 +761,7 @@ class CountryGenerationBulkRangeView(APIView):
         if not valid_countries:
             return Response({"detail": f"Unknown countries: {', '.join(missing_countries)}"}, status=400)
 
-        qs = (
+        base_qs = (
             CountryGenerationByType.objects
             .filter(
                 country_id__in=valid_countries,
@@ -721,11 +771,7 @@ class CountryGenerationBulkRangeView(APIView):
             .select_related("country")
         )
         if psr:
-            qs = qs.filter(psr_type=psr)
-
-        qs = qs.order_by("country_id", "datetime_utc", "psr_type").values(
-            "country_id", "datetime_utc", "psr_type", "psr_name", "generation_mw"
-        )
+            base_qs = base_qs.filter(psr_type=psr)
 
         results: Dict[str, dict] = {
             code: {
@@ -739,14 +785,59 @@ class CountryGenerationBulkRangeView(APIView):
         }
 
         total_records = 0
-        for r in qs:
-            results[r["country_id"]]["items"].append({
-                "datetime_utc": _fmt_z(r["datetime_utc"]),
-                "psr_type": r["psr_type"],
-                "psr_name": r["psr_name"] or r["psr_type"],
-                "generation_mw": r["generation_mw"],
-            })
-            total_records += 1
+        if aggregate_monthly:
+            qs = (
+                base_qs
+                .annotate(month=TruncMonth("datetime_utc", tzinfo=dt.timezone.utc))
+                .values("country_id", "month", "psr_type")
+                .annotate(
+                    psr_name=Max("psr_name"),
+                    generation_mw=Avg("generation_mw"),
+                )
+                .order_by("country_id", "month", "psr_type")
+            )
+            for r in qs:
+                results[r["country_id"]]["items"].append({
+                    "datetime_utc": _fmt_z(r["month"]),
+                    "psr_type": r["psr_type"],
+                    "psr_name": r["psr_name"] or r["psr_type"],
+                    "generation_mw": r["generation_mw"],
+                    "resolution": "P1M",
+                })
+                total_records += 1
+        elif aggregate_daily:
+            qs = (
+                base_qs
+                .annotate(day=TruncDay("datetime_utc", tzinfo=dt.timezone.utc))
+                .values("country_id", "day", "psr_type")
+                .annotate(
+                    psr_name=Max("psr_name"),
+                    generation_mw=Avg("generation_mw"),
+                )
+                .order_by("country_id", "day", "psr_type")
+            )
+            for r in qs:
+                results[r["country_id"]]["items"].append({
+                    "datetime_utc": _fmt_z(r["day"]),
+                    "psr_type": r["psr_type"],
+                    "psr_name": r["psr_name"] or r["psr_type"],
+                    "generation_mw": r["generation_mw"],
+                    "resolution": "P1D",
+                })
+                total_records += 1
+        else:
+            qs = base_qs.order_by("country_id", "datetime_utc", "psr_type").values(
+                "country_id", "datetime_utc", "psr_type", "psr_name", "generation_mw", "resolution"
+            )
+            for r in qs:
+                results[r["country_id"]]["items"].append({
+                    "datetime_utc": _fmt_z(r["datetime_utc"]),
+                    "psr_type": r["psr_type"],
+                    "psr_name": r["psr_name"] or r["psr_type"],
+                    "generation_mw": r["generation_mw"],
+                    "resolution": r["resolution"],
+                })
+                total_records += 1
 
         return Response(
             {
@@ -755,6 +846,7 @@ class CountryGenerationBulkRangeView(APIView):
                     "countries_found": valid_countries,
                 "countries_ignored": missing_countries,
                     "psr": psr,
+                    "resolution": "m" if aggregate_monthly else resolution,
                     "start_utc": _fmt_z(start_utc),
                     "end_utc": _fmt_z(end_utc),
                     "date_label": label,

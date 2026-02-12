@@ -262,6 +262,9 @@ class Command(BaseCommand):
         failed = 0
         total_rows_retrieved = 0
         total_rows_saved = 0
+        countries_no_data = []  # Countries that returned empty data
+        countries_failed = []   # Countries that failed to fetch
+        countries_save_failed = []  # Countries that fetched but failed to save
         start_time = time.time()
 
         for idx, (country, eics) in enumerate(sorted(country_to_eics.items()), 1):
@@ -295,6 +298,7 @@ class Command(BaseCommand):
                     )
                 except Exception as e:
                     failed += 1
+                    countries_save_failed.append(country)
                     self.stdout.write(
                         self.style.ERROR(f"  ❌ {country}: Retrieved {rows_retrieved} rows but failed to save: {str(e)[:100]}")
                     )
@@ -306,11 +310,13 @@ class Command(BaseCommand):
                     all_dfs.append(df)
                     
             elif df is not None and df.empty:
+                countries_no_data.append(country)
                 self.stdout.write(
                     self.style.WARNING(f"  ⚠️  {country}: No data available")
                 )
             else:
                 failed += 1
+                countries_failed.append(country)
                 if not continue_on_error:
                     raise CommandError(f"Failed to fetch data for {country}. Use --continue-on-error to skip failed countries.")
                 self.stdout.write(
@@ -340,6 +346,36 @@ class Command(BaseCommand):
         self.stdout.write(f"💾 Total rows saved to DB: {total_rows_saved}")
         self.stdout.write(f"⏱️  Total time: {elapsed_time:.2f}s")
         self.stdout.write(self.style.SUCCESS("=" * 70))
+        
+        # --- Detailed breakdown of issues ---
+        if countries_no_data or countries_failed or countries_save_failed:
+            self.stdout.write("")
+            self.stdout.write(self.style.WARNING("⚠️  ISSUES DETECTED"))
+            self.stdout.write(self.style.WARNING("=" * 70))
+            
+            if countries_no_data:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"📭 No data available ({len(countries_no_data)}): {', '.join(sorted(countries_no_data))}"
+                    )
+                )
+            
+            if countries_failed:
+                self.stdout.write(
+                    self.style.ERROR(
+                        f"❌ Failed to fetch ({len(countries_failed)}): {', '.join(sorted(countries_failed))}"
+                    )
+                )
+            
+            if countries_save_failed:
+                self.stdout.write(
+                    self.style.ERROR(
+                        f"💥 Failed to save ({len(countries_save_failed)}): {', '.join(sorted(countries_save_failed))}"
+                    )
+                )
+            
+            self.stdout.write(self.style.WARNING("=" * 70))
+        
         self.stdout.write("")
 
         # --- output to file/stdout ---
