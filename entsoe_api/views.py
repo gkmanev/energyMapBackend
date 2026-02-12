@@ -296,6 +296,8 @@ class CountryPricesRangeView(APIView):
     GET /api/prices/range/?country=AT&contract=A01&period=today
     GET /api/prices/range/?country=AT&contract=A01&period=dayahead
     GET /api/prices/range/?country=AT&contract=A01&start=...&end=...
+    GET /api/prices/range/?country=AT&contract=A01&start=...&end=...&resolution=d
+    GET /api/prices/range/?country=AT&contract=A01&start=...&end=...&resolution=m
     """
     def get(self, request):
         iso = request.query_params.get("country", "")
@@ -303,6 +305,10 @@ class CountryPricesRangeView(APIView):
         period = request.query_params.get("period")
         start_s = request.query_params.get("start")
         end_s = request.query_params.get("end")
+        resolution = request.query_params.get("resolution")
+        normalized_resolution = (resolution or "").lower()
+        aggregate_daily = normalized_resolution == "d"
+        aggregate_monthly = normalized_resolution == "m" or _bool_param(request, "m")
 
         try:
             country = _get_country_or_400(iso)
@@ -316,20 +322,58 @@ class CountryPricesRangeView(APIView):
         if start_utc >= end_utc:
             return Response({"detail": "start must be earlier than end."}, status=400)
 
-        qs = (CountryPricePoint.objects
-              .filter(country=country,
-                      contract_type=contract,
-                      datetime_utc__gte=start_utc,
-                      datetime_utc__lt=end_utc)
-              .order_by("datetime_utc"))
+        base_qs = CountryPricePoint.objects.filter(
+            country=country,
+            contract_type=contract,
+            datetime_utc__gte=start_utc,
+            datetime_utc__lt=end_utc,
+        )
 
-        items = [{
-            "datetime_utc": _fmt_z(r.datetime_utc),
-            "price": r.price,
-            "currency": r.currency,
-            "unit": r.unit,
-            "resolution": r.resolution,
-        } for r in qs]
+        if aggregate_monthly:
+            qs = (base_qs
+                  .annotate(month=TruncMonth("datetime_utc", tzinfo=dt.timezone.utc))
+                  .values("month")
+                  .annotate(
+                      price=Avg("price"),
+                      currency=Max("currency"),
+                      unit=Max("unit"),
+                  )
+                  .order_by("month"))
+
+            items = [{
+                "datetime_utc": _fmt_z(r["month"]),
+                "price": r["price"],
+                "currency": r["currency"],
+                "unit": r["unit"],
+                "resolution": "P1M",
+            } for r in qs]
+        elif aggregate_daily:
+            qs = (base_qs
+                  .annotate(day=TruncDay("datetime_utc", tzinfo=dt.timezone.utc))
+                  .values("day")
+                  .annotate(
+                      price=Avg("price"),
+                      currency=Max("currency"),
+                      unit=Max("unit"),
+                  )
+                  .order_by("day"))
+
+            items = [{
+                "datetime_utc": _fmt_z(r["day"]),
+                "price": r["price"],
+                "currency": r["currency"],
+                "unit": r["unit"],
+                "resolution": "P1D",
+            } for r in qs]
+        else:
+            qs = base_qs.order_by("datetime_utc")
+            items = [{
+                "datetime_utc": _fmt_z(r.datetime_utc),
+                "price": r.price,
+                "currency": r.currency,
+                "unit": r.unit,
+                "resolution": r.resolution,
+            } for r in qs]
 
         return Response({
             "country": country.pk,
