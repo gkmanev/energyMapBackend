@@ -198,15 +198,39 @@ class SeleniumExcelScraper:
 
                         if time_value and price_value is not None:
                             # Build full datetime in Cyprus timezone, then convert to UTC
+                            local_dt = None
                             if isinstance(time_value, datetime):
                                 local_dt = time_value.replace(tzinfo=CYPRUS_TZ)
                             else:
                                 ts = str(time_value).strip()
-                                try:
-                                    t = datetime.strptime(ts, "%H:%M").time()
-                                except ValueError:
-                                    t = datetime.strptime(ts, "%H:%M:%S").time()
-                                local_dt = datetime.combine(base_date, t, tzinfo=CYPRUS_TZ)
+                                if ts:
+                                    ts = ts.replace("T", " ")
+                                    ts_main = ts.split(".")[0]  # drop fractional seconds
+                                    # If the string includes a date, parse full datetime first.
+                                    if " " in ts_main:
+                                        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+                                            try:
+                                                dt = datetime.strptime(ts_main, fmt)
+                                                local_dt = dt.replace(tzinfo=CYPRUS_TZ)
+                                                break
+                                            except ValueError:
+                                                continue
+                                    if local_dt is None:
+                                        # Parse time-only strings like 00:00 or 00:00:00
+                                        for fmt in ("%H:%M:%S", "%H:%M"):
+                                            try:
+                                                t = datetime.strptime(ts_main, fmt).time()
+                                                day = base_date
+                                                if t.hour == 24:
+                                                    t = t.replace(hour=0, minute=0, second=0)
+                                                    day = base_date.fromordinal(base_date.toordinal() + 1)
+                                                local_dt = datetime.combine(day, t, tzinfo=CYPRUS_TZ)
+                                                break
+                                            except ValueError:
+                                                continue
+
+                            if local_dt is None:
+                                continue
 
                             dt_utc = local_dt.astimezone(ZoneInfo("UTC"))
 
