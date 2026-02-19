@@ -1,7 +1,6 @@
 from django.core.management.base import BaseCommand
 
 import shutil
-import tempfile
 import time
 import os
 from datetime import datetime
@@ -43,7 +42,8 @@ class SeleniumExcelScraper:
             }
 
         driver = None
-        download_dir = tempfile.mkdtemp(prefix="tsoc_")
+        download_dir = str(Path(__file__).resolve().parent.parent.parent / "temp")
+        os.makedirs(download_dir, exist_ok=True)
         try:
             chrome_options = uc.ChromeOptions()
             chrome_options.add_argument('--no-sandbox')
