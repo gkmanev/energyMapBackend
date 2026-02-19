@@ -10,7 +10,7 @@ from django.conf import settings
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.timezone import get_default_timezone
 from django.db.models import Avg, Max, Q
-from django.db.models.functions import TruncDay, TruncMonth
+from django.db.models.functions import TruncDay, TruncMonth, TruncYear
 from rest_framework.views import APIView
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -309,6 +309,7 @@ class CountryPricesRangeView(APIView):
         normalized_resolution = (resolution or "").lower()
         aggregate_daily = normalized_resolution == "d"
         aggregate_monthly = normalized_resolution == "m" or _bool_param(request, "m")
+        aggregate_yearly = normalized_resolution == "y"
 
         try:
             country = _get_country_or_400(iso)
@@ -329,7 +330,25 @@ class CountryPricesRangeView(APIView):
             datetime_utc__lt=end_utc,
         )
 
-        if aggregate_monthly:
+        if aggregate_yearly:
+            qs = (base_qs
+                  .annotate(year=TruncYear("datetime_utc", tzinfo=dt.timezone.utc))
+                  .values("year")
+                  .annotate(
+                      price=Avg("price"),
+                      currency=Max("currency"),
+                      unit=Max("unit"),
+                  )
+                  .order_by("year"))
+
+            items = [{
+                "datetime_utc": _fmt_z(r["year"]),
+                "price": r["price"],
+                "currency": r["currency"],
+                "unit": r["unit"],
+                "resolution": "P1Y",
+            } for r in qs]
+        elif aggregate_monthly:
             qs = (base_qs
                   .annotate(month=TruncMonth("datetime_utc", tzinfo=dt.timezone.utc))
                   .values("month")
@@ -404,6 +423,7 @@ class CountryPricesBulkRangeView(APIView):
         normalized_resolution = (resolution or "").lower()
         aggregate_daily = normalized_resolution == "d"
         aggregate_monthly = normalized_resolution == "m" or _bool_param(request, "m")
+        aggregate_yearly = normalized_resolution == "y"
 
         country_codes = _split_codes(countries_param)
         if not country_codes:
@@ -433,7 +453,34 @@ class CountryPricesBulkRangeView(APIView):
         )
 
         results: Dict[str, dict] = {}
-        if aggregate_monthly:
+        if aggregate_yearly:
+            qs = (base_qs
+                  .annotate(year=TruncYear("datetime_utc", tzinfo=dt.timezone.utc))
+                  .values("country_id", "year")
+                  .annotate(
+                      price=Avg("price"),
+                      currency=Max("currency"),
+                      unit=Max("unit"),
+                  )
+                  .order_by("country_id", "year"))
+
+            for rec in qs:
+                cid = rec["country_id"]
+                bucket = results.setdefault(cid, {
+                    "country": cid,
+                    "contract_type": contract,
+                    "start_utc": _fmt_z(start_utc),
+                    "end_utc": _fmt_z(end_utc),
+                    "items": [],
+                })
+                bucket["items"].append({
+                    "datetime_utc": _fmt_z(rec["year"]),
+                    "price": rec["price"],
+                    "currency": rec["currency"],
+                    "unit": rec["unit"],
+                    "resolution": "P1Y",
+                })
+        elif aggregate_monthly:
             qs = (base_qs
                   .annotate(month=TruncMonth("datetime_utc", tzinfo=dt.timezone.utc))
                   .values("country_id", "month")
@@ -569,6 +616,7 @@ class CountryGenerationRangeView(APIView):
         normalized_resolution = (resolution or "").lower()
         aggregate_daily = normalized_resolution == "d"
         aggregate_monthly = normalized_resolution == "m" or _bool_param(request, "m")
+        aggregate_yearly = normalized_resolution == "y"
 
         try:
             country = _get_country_or_400(country_q)
@@ -596,7 +644,25 @@ class CountryGenerationRangeView(APIView):
         if psr:
             qs = qs.filter(psr_type=psr)
 
-        if aggregate_monthly:
+        if aggregate_yearly:
+            rows = (
+                qs.annotate(year=TruncYear("datetime_utc", tzinfo=dt.timezone.utc))
+                .values("year", "psr_type")
+                .annotate(
+                    psr_name=Max("psr_name"),
+                    generation_mw=Avg("generation_mw"),
+                )
+                .order_by("year", "psr_type")
+            )
+
+            items = [{
+                "datetime_utc": _fmt_z(r["year"]),
+                "psr_type": r["psr_type"],
+                "psr_name": r["psr_name"] or r["psr_type"],
+                "generation_mw": r["generation_mw"],
+                "resolution": "P1Y",
+            } for r in rows]
+        elif aggregate_monthly:
             rows = (
                 qs.annotate(month=TruncMonth("datetime_utc", tzinfo=dt.timezone.utc))
                 .values("month", "psr_type")
@@ -781,6 +847,7 @@ class CountryGenerationBulkRangeView(APIView):
         normalized_resolution = (resolution or "").lower()
         aggregate_daily = normalized_resolution == "d"
         aggregate_monthly = normalized_resolution == "m" or _bool_param(request, "m")
+        aggregate_yearly = normalized_resolution == "y"
 
         country_codes = _split_codes(countries_param)
         if not country_codes:
@@ -829,7 +896,27 @@ class CountryGenerationBulkRangeView(APIView):
         }
 
         total_records = 0
-        if aggregate_monthly:
+        if aggregate_yearly:
+            qs = (
+                base_qs
+                .annotate(year=TruncYear("datetime_utc", tzinfo=dt.timezone.utc))
+                .values("country_id", "year", "psr_type")
+                .annotate(
+                    psr_name=Max("psr_name"),
+                    generation_mw=Avg("generation_mw"),
+                )
+                .order_by("country_id", "year", "psr_type")
+            )
+            for r in qs:
+                results[r["country_id"]]["items"].append({
+                    "datetime_utc": _fmt_z(r["year"]),
+                    "psr_type": r["psr_type"],
+                    "psr_name": r["psr_name"] or r["psr_type"],
+                    "generation_mw": r["generation_mw"],
+                    "resolution": "P1Y",
+                })
+                total_records += 1
+        elif aggregate_monthly:
             qs = (
                 base_qs
                 .annotate(month=TruncMonth("datetime_utc", tzinfo=dt.timezone.utc))
