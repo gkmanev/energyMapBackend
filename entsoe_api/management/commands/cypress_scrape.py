@@ -1,5 +1,7 @@
 from django.core.management.base import BaseCommand
 
+import shutil
+import tempfile
 import time
 import os
 from datetime import datetime
@@ -41,14 +43,12 @@ class SeleniumExcelScraper:
             }
 
         driver = None
+        download_dir = tempfile.mkdtemp(prefix="tsoc_")
         try:
             chrome_options = uc.ChromeOptions()
             chrome_options.add_argument('--no-sandbox')
             chrome_options.add_argument('--disable-dev-shm-usage')
             chrome_options.add_argument('--window-size=1920,1080')
-
-            download_dir = str(Path.home() / "Downloads" / "tsoc_data")
-            os.makedirs(download_dir, exist_ok=True)
 
             prefs = {
                 "download.default_directory": download_dir,
@@ -154,6 +154,7 @@ class SeleniumExcelScraper:
         finally:
             if driver:
                 driver.quit()
+            shutil.rmtree(download_dir, ignore_errors=True)
 
     def _parse_excel(self, excel_file_path: str, date_str: str) -> list[dict]:
         """Parse Excel file and return list of {datetime_utc, price} dicts."""
