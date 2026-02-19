@@ -50,10 +50,6 @@ class SeleniumExcelScraper:
             chrome_options.add_argument('--disable-dev-shm-usage')
             chrome_options.add_argument('--window-size=1920,1080')
 
-            # Run headless inside Docker (no display available)
-            if os.path.exists('/.dockerenv'):
-                chrome_options.add_argument('--headless=new')
-
             prefs = {
                 "download.default_directory": download_dir,
                 "download.prompt_for_download": False,
