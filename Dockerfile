@@ -14,7 +14,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PATH="/usr/local/bin:${PATH}"
 
 # Install system deps + Chrome for Selenium scraping
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libpq5 curl gnupg \
+      libpq5 curl gnupg xvfb \
   && curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
       | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
   && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] \
@@ -35,6 +35,9 @@ COPY --from=builder /tmp/wheels /wheels
 COPY --from=builder /tmp/build/requirements.txt /tmp/requirements.txt
 RUN python -m pip install --no-cache-dir /wheels/*
 COPY . $APP_HOME
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 RUN chown -R appuser:appuser /home/appuser
 USER appuser
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python", "-m", "http.server", "8000"]

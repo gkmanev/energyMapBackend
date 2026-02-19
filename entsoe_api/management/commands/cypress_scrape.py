@@ -49,6 +49,19 @@ class SeleniumExcelScraper:
             chrome_options.add_argument('--no-sandbox')
             chrome_options.add_argument('--disable-dev-shm-usage')
             chrome_options.add_argument('--window-size=1920,1080')
+            chrome_options.add_argument('--disable-gpu')
+            chrome_options.add_argument('--disable-software-rasterizer')
+            chrome_options.add_argument('--disable-extensions')
+
+            # Headless is required in most Docker environments (no DISPLAY).
+            is_container = Path("/.dockerenv").exists()
+            has_display = bool(os.environ.get("DISPLAY"))
+            force_headless = os.environ.get("CHROME_HEADLESS", "1") != "0"
+            if force_headless and (is_container or not has_display):
+                chrome_options.add_argument("--headless=new")
+
+            # Avoid profile permission issues in containers.
+            chrome_options.add_argument("--user-data-dir=/tmp/chrome")
 
             prefs = {
                 "download.default_directory": download_dir,
