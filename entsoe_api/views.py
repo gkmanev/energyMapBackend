@@ -192,6 +192,7 @@ def _flow_field_names() -> Tuple[str, str, str]:
 def api_root(request, format=None):
     return Response({
         "capacity_latest": request.build_absolute_uri(reverse("capacity-latest")),
+        "capacity_bulk_latest": request.build_absolute_uri(reverse("capacity-bulk-latest")),
         "generation_yesterday": request.build_absolute_uri(reverse("generation-yesterday")),
         "prices_range": request.build_absolute_uri(reverse("prices-range")),
         "price_bulk": request.build_absolute_uri(reverse("country-prices-bulk-range")),
@@ -236,6 +237,81 @@ class CountryCapacityLatestView(APIView):
             qs.order_by("psr_type").values("psr_type", "psr_name", "installed_capacity_mw")
         )
         return Response({"country": country.pk, "year": int(latest), "items": items}, status=200)
+
+
+class CountryCapacityBulkLatestView(APIView):
+    """
+    GET /api/capacity/bulk-latest/?countries=AT,DE,FR[&psr=B16]
+
+    Returns the latest-year installed capacity snapshot for multiple countries
+    in a single request.
+    """
+    MAX_COUNTRIES = 40
+
+    def get(self, request):
+        start_perf = time.perf_counter()
+        countries_param = request.query_params.get("countries", "")
+        psr = request.query_params.get("psr")
+
+        country_codes = _split_codes(countries_param)
+        if not country_codes:
+            return Response({"detail": "countries parameter is required"}, status=400)
+        if len(country_codes) > self.MAX_COUNTRIES:
+            return Response({"detail": f"Maximum {self.MAX_COUNTRIES} countries per request"}, status=400)
+
+        valid_countries, missing_countries = _partition_country_codes(country_codes)
+        if not valid_countries:
+            return Response({"detail": f"Unknown countries: {', '.join(missing_countries)}"}, status=400)
+
+        # Find the latest year per country in one query
+        latest_years = (
+            CountryCapacitySnapshot.objects
+            .filter(country_id__in=valid_countries)
+            .values("country_id")
+            .annotate(max_year=Max("year"))
+        )
+        year_map = {row["country_id"]: row["max_year"] for row in latest_years}
+
+        # Build a single query filtering each country by its latest year
+        combined_q = Q()
+        for cid, yr in year_map.items():
+            combined_q |= Q(country_id=cid, year=yr)
+
+        results: Dict[str, dict] = {
+            code: {"country": code, "year": year_map.get(code), "items": []}
+            for code in valid_countries
+        }
+
+        if combined_q:
+            qs = CountryCapacitySnapshot.objects.filter(combined_q)
+            if psr:
+                qs = qs.filter(psr_type=psr)
+            qs = qs.order_by("country_id", "psr_type")
+
+            for row in qs.values("country_id", "psr_type", "psr_name", "installed_capacity_mw", "year"):
+                cid = row["country_id"]
+                results[cid]["year"] = row["year"]
+                results[cid]["items"].append({
+                    "psr_type": row["psr_type"],
+                    "psr_name": row["psr_name"],
+                    "installed_capacity_mw": row["installed_capacity_mw"],
+                })
+
+        elapsed_ms = (time.perf_counter() - start_perf) * 1000
+        total_records = sum(len(v["items"]) for v in results.values())
+
+        return Response({
+            "request_info": {
+                "countries_requested": country_codes,
+                "countries_found": valid_countries,
+                "countries_ignored": missing_countries,
+                "psr": psr,
+                "total_countries": len(results),
+                "total_records": total_records,
+                "server_elapsed_ms": round(elapsed_ms, 2),
+            },
+            "data": results,
+        }, status=200)
 
 
 # ───────────────────────── Generation (yesterday quick) ────────────────────────
