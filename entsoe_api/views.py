@@ -7,8 +7,11 @@ import time
 from typing import Iterable, Tuple, Dict, List
 
 from django.conf import settings
+from django.core.cache import cache
 from django.utils.dateparse import parse_date, parse_datetime
+from django.utils.decorators import method_decorator
 from django.utils.timezone import get_default_timezone
+from django.views.decorators.cache import cache_page
 from django.db.models import Avg, Max, Q
 from django.db.models.functions import TruncDay, TruncMonth, TruncYear
 from rest_framework.views import APIView
@@ -85,17 +88,25 @@ def _bool_param(request, key: str) -> bool:
 def _split_codes(s: str) -> List[str]:
     return [c.strip().upper() for c in (s or "").split(",") if c.strip()]
 
+def _all_country_codes() -> set:
+    """Return the set of all known country ISO codes, cached for 1 hour."""
+    codes = cache.get("all_country_codes")
+    if codes is None:
+        codes = set(Country.objects.values_list("pk", flat=True))
+        cache.set("all_country_codes", codes, 3600)
+    return codes
+
 def _get_country_or_400(country_iso: str) -> Country:
     iso = (country_iso or "").upper()
-    try:
-        return Country.objects.get(pk=iso)
-    except Country.DoesNotExist:
+    if iso not in _all_country_codes():
         raise ValueError(f"Unknown country '{iso}'. Make sure it's loaded in the DB.")
+    return Country(pk=iso)
 
 def _partition_country_codes(codes: Iterable[str]) -> Tuple[List[str], List[str]]:
     requested_codes = sorted({c.upper() for c in codes if c})
-    valid = list(Country.objects.filter(pk__in=requested_codes).values_list("pk", flat=True))
-    missing = sorted(set(requested_codes) - set(valid))
+    known = _all_country_codes()
+    valid = sorted(c for c in requested_codes if c in known)
+    missing = sorted(set(requested_codes) - known)
     return valid, missing
 
 
@@ -207,6 +218,7 @@ def api_root(request, format=None):
 
 # ─────────────────────────── Capacity (latest year) ────────────────────────────
 
+@method_decorator(cache_page(3600), name="get")
 class CountryCapacityLatestView(APIView):
     """
     GET /api/capacity/latest/?country=CZ[&psr=B16]
@@ -239,6 +251,7 @@ class CountryCapacityLatestView(APIView):
         return Response({"country": country.pk, "year": int(latest), "items": items}, status=200)
 
 
+@method_decorator(cache_page(3600), name="get")
 class CountryCapacityBulkLatestView(APIView):
     """
     GET /api/capacity/bulk-latest/?countries=AT,DE,FR[&psr=B16]
@@ -367,6 +380,7 @@ class CountryGenerationYesterdayView(APIView):
 
 # ─────────────────────────────── Prices (range) ────────────────────────────────
 
+@method_decorator(cache_page(600), name="get")
 class CountryPricesRangeView(APIView):
     """
     GET /api/prices/range/?country=AT&contract=A01&period=today
@@ -479,6 +493,7 @@ class CountryPricesRangeView(APIView):
         }, status=200)
 
 
+@method_decorator(cache_page(600), name="get")
 class CountryPricesBulkRangeView(APIView):
     """
     GET /api/prices/bulk-range/?countries=AT,DE,FR&contract=A01&period=today
@@ -673,6 +688,7 @@ class CountryPricesBulkRangeView(APIView):
 
 # ───────────────────────────── Generation (range) ──────────────────────────────
 
+@method_decorator(cache_page(600), name="get")
 class CountryGenerationRangeView(APIView):
     """
     GET /api/generation/range/?country=CZ[&psr=B16][&local=1]
@@ -796,6 +812,7 @@ class CountryGenerationRangeView(APIView):
         }, status=200)
 
 
+@method_decorator(cache_page(600), name="get")
 class CountryGenerationResRangeView(APIView):
     """
     GET /api/generation-res/range/?country=CZ[&psr=B16][&local=1]
@@ -853,6 +870,7 @@ class CountryGenerationResRangeView(APIView):
         }, status=200)
 
 
+@method_decorator(cache_page(600), name="get")
 class CountryGenerationForecastRangeView(APIView):
     """GET /api/generation-forecast/range/?country=CZ&period=today|..."""
 
@@ -902,6 +920,7 @@ class CountryGenerationForecastRangeView(APIView):
         }, status=200)
 
 
+@method_decorator(cache_page(600), name="get")
 class CountryGenerationBulkRangeView(APIView):
     """
     GET /api/generation/bulk-range/?countries=AT,DE,FR[&psr=B16][&local=1]
@@ -955,7 +974,6 @@ class CountryGenerationBulkRangeView(APIView):
                 datetime_utc__gte=start_utc,
                 datetime_utc__lt=end_utc,
             )
-            .select_related("country")
         )
         if psr:
             base_qs = base_qs.filter(psr_type=psr)
@@ -1147,15 +1165,17 @@ class PhysicalFlowsRangeView(APIView):
 
         qs = qs.order_by(ts_field, src_field, dst_field)
         serializer = PhysicalFlowSerializer(qs, many=True)
+        items = serializer.data
 
         return Response({
             "start_utc": _fmt_z(start_utc),
             "end_utc": _fmt_z(end_utc),
-            "count": qs.count(),
-            "items": serializer.data
+            "count": len(items),
+            "items": items,
         }, status=200)
 
 
+@method_decorator(cache_page(300), name="get")
 class PhysicalFlowsLatestView(APIView):
     """
     GET /api/flows/latest/?country=BG[&neighbors=1]
@@ -1195,12 +1215,13 @@ class PhysicalFlowsLatestView(APIView):
                 .order_by(ts_field, src_field, dst_field))
 
         serializer = PhysicalFlowSerializer(base, many=True)
+        items = serializer.data
 
         in_total = 0.0
         out_total = 0.0
         mw_key = PHYSICAL_FLOW_MW_FIELD
 
-        for row in serializer.data:
+        for row in items:
             val = float(row.get(mw_key, 0) or 0)
             src = row.get(src_field) or row.get("source_country") or row.get("from_country") or row.get("country_from")
             dst = row.get(dst_field) or row.get("target_country") or row.get("to_country")   or row.get("country_to")
@@ -1213,14 +1234,14 @@ class PhysicalFlowsLatestView(APIView):
             "country": country.pk,
             "start_utc": _fmt_z(start_utc),
             "end_utc": _fmt_z(end_utc),
-            "count": base.count(),
-            "items": serializer.data,
+            "count": len(items),
+            "items": items,
             "totals": {"in_mw": in_total, "out_mw": out_total, "net_mw": in_total - out_total},
         }
 
         if with_neighbors:
             by_neighbor: Dict[str, Dict[str, float]] = {}
-            for row in serializer.data:
+            for row in items:
                 val = float(row.get(mw_key, 0) or 0)
                 src = row.get(src_field) or row.get("source_country") or row.get("from_country") or row.get("country_from")
                 dst = row.get(dst_field) or row.get("target_country") or row.get("to_country")   or row.get("country_to")
