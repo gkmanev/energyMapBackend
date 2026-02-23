@@ -364,3 +364,9 @@ ENTSOE_COUNTRY_TO_EICS = {
     "XK": "10Y1001C--00100H",
     "GE": "10Y1001A1001B012",
 }
+
+# Countries that publish A68 installed capacity at the country level only,
+# not per bidding zone. Overrides ENTSOE_COUNTRY_TO_EICS for capacity queries.
+ENTSOE_CAPACITY_EIC_OVERRIDES = {
+    "SE": "10YSE-1--------K",   # Svenska kraftnät — country level only
+}

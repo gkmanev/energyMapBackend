@@ -79,7 +79,14 @@ class Command(BaseCommand):
                 raise CommandError(f"Unknown country '{country_arg}'. Known: {known}")
             country_to_eics = {country_arg: mapping[country_arg]}
         else:
-            country_to_eics = mapping
+            country_to_eics = dict(mapping)
+
+        # Apply capacity-specific EIC overrides (some countries publish A68 at
+        # country level only, not per bidding zone).
+        capacity_overrides = getattr(settings, "ENTSOE_CAPACITY_EIC_OVERRIDES", {})
+        for code, eic in capacity_overrides.items():
+            if code in country_to_eics:
+                country_to_eics[code] = eic
 
         # --- optional filters/anchors ---
         psr_type = options.get("psr_type")
