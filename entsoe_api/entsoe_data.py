@@ -107,6 +107,10 @@ class EntsoeInstalledCapacity:
         for reason in root.findall(".//{*}Reason"):
             code = (reason.findtext("{*}code") or "").strip()
             text = (reason.findtext("{*}text") or "").strip()
+            if code == "999":
+                # "No matching data found" — normal for windows with no published data.
+                # Return [] so the caller can fall back to a different year.
+                return []
             raise RuntimeError(f"ENTSO-E API error: {code} {text}".strip())
 
         rows: List[Dict] = []
