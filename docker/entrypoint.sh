@@ -7,6 +7,7 @@ if [ "${CHROME_HEADLESS:-1}" = "0" ]; then
     export DISPLAY=:99
   fi
   Xvfb "$DISPLAY" -screen 0 1920x1080x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
+  sleep 2   # give Xvfb time to initialise before Chrome connects
 fi
 
 exec "$@"
