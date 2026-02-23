@@ -230,6 +230,7 @@ class EntsoeInstalledCapacity:
         aggregate_by_country: bool = True,
         now_utc: Optional[dt.datetime] = None,
         skip_errors: bool = True,
+        warn_fn=print,
     ) -> pd.DataFrame:
         """
         Fetch the latest installed capacity for MANY countries.
@@ -242,7 +243,8 @@ class EntsoeInstalledCapacity:
             psr_type: optional PSR filter (e.g., 'B16')
             aggregate_by_country: sum capacities across zones into country totals
             now_utc: optional anchor time
-            skip_errors: if True, zones that raise are skipped (and logged via print)
+            skip_errors: if True, zones that raise are skipped (and logged via warn_fn)
+            warn_fn: callable used to emit skip warnings (default: print)
 
         Returns:
             DataFrame
@@ -262,7 +264,7 @@ class EntsoeInstalledCapacity:
                     frames.append(df)
                 except Exception as e:
                     if skip_errors:
-                        print(f"[entsoe] Skipping {country}/{z} due to error: {e}")
+                        warn_fn(f"[entsoe] Skipping {country}/{z} due to error: {e}")
                         continue
                     raise
 

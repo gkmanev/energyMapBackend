@@ -48,6 +48,12 @@ class Command(BaseCommand):
             type=str,
             help="Advanced: ISO timestamp to anchor 'current year' (e.g. '2025-01-10T00:00:00Z'). Normally omit.",
         )
+        parser.add_argument(
+            "--skip-errors",
+            default="true",
+            choices=["true", "false"],
+            help="Skip zones that fail (default true). Set 'false' to raise on first error.",
+        )
 
     def handle(self, *args, **options):
         # --- API key ---
@@ -85,6 +91,11 @@ class Command(BaseCommand):
             except Exception:
                 raise CommandError(f"Invalid --now-utc value: {now_utc_opt}")
 
+        skip_errors = options["skip_errors"] != "false"
+
+        def _warn(msg):
+            self.stderr.write(self.style.WARNING(msg))
+
         # --- fetch (always aggregated per country) ---
         df = EntsoeInstalledCapacity.query_all_countries(
             api_key=api_key,
@@ -92,13 +103,19 @@ class Command(BaseCommand):
             psr_type=psr_type,
             aggregate_by_country=True,  # keep it simple
             now_utc=now_utc,
-            skip_errors=True,
+            skip_errors=skip_errors,
+            warn_fn=_warn,
         )
         written = save_capacity_df(df)
         self.stdout.write(self.style.SUCCESS(f"Saved {written} capacity rows."))
 
         if df.empty:
-            self.stdout.write(self.style.WARNING("No data returned."))
+            self.stderr.write(self.style.WARNING(
+                "No data returned. Possible causes:\n"
+                "  - A68/A33 (year-ahead installed capacity) not yet published for this year.\n"
+                "  - Check ENTSOE_TOKEN is valid and zone EICs in ENTSOE_COUNTRY_TO_EICS are correct.\n"
+                "  - Rerun with --skip-errors false to see raw exceptions."
+            ))
             return
 
         # --- output ---
