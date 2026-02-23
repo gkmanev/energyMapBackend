@@ -101,10 +101,12 @@ class EntsoeInstalledCapacity:
         ns = {"gl": "urn:iec62325.351:tc57wg16:451-6:generationloaddocument:3:0"}
         root = ET.fromstring(xml_text)
 
-        # ENTSO-E sometimes encodes errors inside 200 OK XML bodies via <Reason>
-        for reason in root.findall(".//gl:Reason", ns):
-            code = (reason.findtext("gl:code", default="", namespaces=ns) or "").strip()
-            text = (reason.findtext("gl:text", default="", namespaces=ns) or "").strip()
+        # ENTSO-E sometimes encodes errors inside 200 OK XML bodies via <Reason>.
+        # The error document may use a different namespace (e.g. AcknowledgementDocument),
+        # so search without namespace binding using the {*} wildcard.
+        for reason in root.findall(".//{*}Reason"):
+            code = (reason.findtext("{*}code") or "").strip()
+            text = (reason.findtext("{*}text") or "").strip()
             raise RuntimeError(f"ENTSO-E API error: {code} {text}".strip())
 
         rows: List[Dict] = []
@@ -145,6 +147,7 @@ class EntsoeInstalledCapacity:
         start_utc: dt.datetime,
         end_utc: dt.datetime,
         psr_type: Optional[str] = None,
+        debug: bool = False,
     ) -> List[Dict]:
         params = {
             "documentType": "A68",
@@ -157,6 +160,10 @@ class EntsoeInstalledCapacity:
         if psr_type:
             params["psrType"] = psr_type
         xml_text = self._request_with_retries(params)
+        if debug:
+            print(f"[debug] A68 response for {zone_eic} "
+                  f"({self._to_utc_compact(start_utc)}-{self._to_utc_compact(end_utc)}):\n"
+                  f"{xml_text[:3000]}\n")
         return self._parse_a68(xml_text, zone_eic)
 
     @staticmethod
@@ -173,7 +180,8 @@ class EntsoeInstalledCapacity:
         self,
         zone_eic: str,
         psr_type: Optional[str] = None,
-        now_utc: Optional[dt.datetime] = None
+        now_utc: Optional[dt.datetime] = None,
+        debug: bool = False,
     ) -> pd.DataFrame:
         """
         Return the most recently published A68 snapshot for a single zone.
@@ -191,14 +199,14 @@ class EntsoeInstalledCapacity:
         # Probe current year; if empty, fall back one year
         cur_y = now_utc.year
         start_cur, end_cur = self._window_for_year(cur_y)
-        records = self._query_a68_window(zone_eic, start_cur, end_cur, psr_type)
+        records = self._query_a68_window(zone_eic, start_cur, end_cur, psr_type, debug=debug)
 
         if records:
             target_year, window_end = cur_y, end_cur
         else:
             prev_y = cur_y - 1
             start_prev, end_prev = self._window_for_year(prev_y)
-            records = self._query_a68_window(zone_eic, start_prev, end_prev, psr_type)
+            records = self._query_a68_window(zone_eic, start_prev, end_prev, psr_type, debug=debug)
             target_year, window_end = prev_y, end_prev
 
         df = pd.DataFrame.from_records(records)
@@ -231,6 +239,7 @@ class EntsoeInstalledCapacity:
         now_utc: Optional[dt.datetime] = None,
         skip_errors: bool = True,
         warn_fn=print,
+        debug: bool = False,
     ) -> pd.DataFrame:
         """
         Fetch the latest installed capacity for MANY countries.
@@ -258,7 +267,7 @@ class EntsoeInstalledCapacity:
             zone_list = zones if isinstance(zones, list) else [zones]
             for z in zone_list:
                 try:
-                    df = client.get_latest(z, psr_type=psr_type, now_utc=now_utc)
+                    df = client.get_latest(z, psr_type=psr_type, now_utc=now_utc, debug=debug)
                     df = df.copy()
                     df["country"] = country
                     frames.append(df)

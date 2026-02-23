@@ -54,6 +54,11 @@ class Command(BaseCommand):
             choices=["true", "false"],
             help="Skip zones that fail (default true). Set 'false' to raise on first error.",
         )
+        parser.add_argument(
+            "--debug",
+            action="store_true",
+            help="Print raw XML responses from ENTSO-E for diagnosis.",
+        )
 
     def handle(self, *args, **options):
         # --- API key ---
@@ -105,6 +110,7 @@ class Command(BaseCommand):
             now_utc=now_utc,
             skip_errors=skip_errors,
             warn_fn=_warn,
+            debug=options["debug"],
         )
         written = save_capacity_df(df)
         self.stdout.write(self.style.SUCCESS(f"Saved {written} capacity rows."))
