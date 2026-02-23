@@ -369,4 +369,5 @@ ENTSOE_COUNTRY_TO_EICS = {
 # not per bidding zone. Overrides ENTSOE_COUNTRY_TO_EICS for capacity queries.
 ENTSOE_CAPACITY_EIC_OVERRIDES = {
     "SE": "10YSE-1--------K",   # Svenska kraftnät — country level only
+    "IT": "10YIT-GRTN-----B",   # Terna — country level only
 }
