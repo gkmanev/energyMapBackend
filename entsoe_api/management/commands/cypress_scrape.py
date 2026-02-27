@@ -73,7 +73,7 @@ class SeleniumExcelScraper:
             }
             chrome_options.add_experimental_option("prefs", prefs)
 
-            driver = uc.Chrome(options=chrome_options, use_subprocess=True)
+            driver = uc.Chrome(options=chrome_options, use_subprocess=True, version_main=145)
 
             url = (
                 f"https://tsoc.org.cy/competitive-electricity-market/"
