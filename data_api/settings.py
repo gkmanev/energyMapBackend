@@ -117,9 +117,9 @@ REST_FRAMEWORK = {
 }
 
 SPECTACULAR_SETTINGS = {
-    "TITLE": "ENTSO-E Data API",
+    "TITLE": "visualize.energy Platform Data API",
     "DESCRIPTION": (
-        "REST API for ENTSO-E capacity, generation, price, and cross-border flow data. "
+        "REST API for visualize.energy - capacity, generation, price, and cross-border flow data. "
         "Use `/api/schema/` for the OpenAPI schema, `/api/docs/swagger/` to try endpoints, "
         "and `/api/docs/redoc/` for the reference documentation."
     ),
