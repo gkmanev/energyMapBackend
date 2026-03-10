@@ -75,10 +75,15 @@ class CountryPricePointSerializer(serializers.ModelSerializer):
         ]
 
 class PhysicalFlowSerializer(serializers.ModelSerializer):
+    country_from = serializers.SlugRelatedField(slug_field="iso_code", read_only=True)
+    country_to = serializers.SlugRelatedField(slug_field="iso_code", read_only=True)
+
     class Meta:
         model = PhysicalFlow
         fields = [
             "datetime_utc",
+            "country_from",
+            "country_to",
             "out_domain_eic",
             "in_domain_eic",
             "resolution",

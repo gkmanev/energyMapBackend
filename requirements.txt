@@ -9,8 +9,10 @@ cryptography==38.0.4
 pyOpenSSL==22.0.0
 redis==5.0.3
 djangorestframework
+drf-spectacular[sidecar]
 django-cors-headers
 django-filter==25.2
+whitenoise
 requests
 paho-mqtt==1.6.1
 pytz

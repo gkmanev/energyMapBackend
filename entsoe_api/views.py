@@ -14,6 +14,7 @@ from django.utils.timezone import get_default_timezone
 from django.views.decorators.cache import cache_page
 from django.db.models import Avg, Max, Q
 from django.db.models.functions import TruncDay, TruncMonth, TruncYear
+from drf_spectacular.utils import OpenApiExample, extend_schema
 from rest_framework.views import APIView
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -33,6 +34,35 @@ from entsoe_api.serializers import (
     CountryGenerationForecastByTypeSerializer,
     CountryResGenerationByTypeSerializer,
     PhysicalFlowSerializer,
+)
+from .api_docs import (
+    ApiRootResponseSerializer,
+    BAD_REQUEST_RESPONSE,
+    CapacityBulkResponseSerializer,
+    CapacityLatestResponseSerializer,
+    CONTRACT_PARAMETER,
+    countries_parameter,
+    country_parameter,
+    END_PARAMETER,
+    FLOW_FROM_PARAMETER,
+    FLOW_TO_PARAMETER,
+    GenerationBulkResponseSerializer,
+    GenerationForecastResponseSerializer,
+    GenerationRangeResponseSerializer,
+    INVALID_COUNTRY_EXAMPLE,
+    INVALID_RANGE_EXAMPLE,
+    LOCAL_PARAMETER,
+    MONTHLY_FLAG_PARAMETER,
+    NEIGHBORS_PARAMETER,
+    period_parameter,
+    PhysicalFlowsLatestResponseSerializer,
+    PhysicalFlowsRangeResponseSerializer,
+    PriceBulkResponseSerializer,
+    PriceRangeResponseSerializer,
+    psr_parameter,
+    RESOLUTION_PARAMETER,
+    ResGenerationResponseSerializer,
+    START_PARAMETER,
 )
 
 logger = logging.getLogger(__name__)
@@ -199,6 +229,34 @@ def _flow_field_names() -> Tuple[str, str, str]:
 
 # ───────────────────────────────── API Root ────────────────────────────────────
 
+@extend_schema(
+    tags=["Meta"],
+    summary="List API entrypoints",
+    description="Returns the main data endpoints together with links to the OpenAPI schema, Swagger UI, and ReDoc.",
+    responses={200: ApiRootResponseSerializer},
+    examples=[
+        OpenApiExample(
+            "API root response",
+            response_only=True,
+            value={
+                "capacity_latest": "https://api.example.com/api/capacity/latest/",
+                "capacity_bulk_latest": "https://api.example.com/api/capacity/bulk-latest/",
+                "generation_yesterday": "https://api.example.com/api/generation/yesterday/",
+                "prices_range": "https://api.example.com/api/prices/range/",
+                "price_bulk": "https://api.example.com/api/prices/bulk-range/",
+                "generation_range": "https://api.example.com/api/generation/range/",
+                "generation_res_range": "https://api.example.com/api/generation-res/range/",
+                "generation_bulk_range": "https://api.example.com/api/generation/bulk-range/",
+                "generation_forecast_range": "https://api.example.com/api/generation-forecast/range/",
+                "flows_range": "https://api.example.com/api/flows/range/",
+                "flows_latest": "https://api.example.com/api/flows/latest/",
+                "schema": "https://api.example.com/api/schema/",
+                "swagger_ui": "https://api.example.com/api/docs/swagger/",
+                "redoc": "https://api.example.com/api/docs/redoc/",
+            },
+        )
+    ],
+)
 @api_view(["GET"])
 def api_root(request, format=None):
     return Response({
@@ -213,6 +271,9 @@ def api_root(request, format=None):
         "generation_forecast_range": request.build_absolute_uri(reverse("generation-forecast-range")),
         "flows_range": request.build_absolute_uri(reverse("flows-range")),
         "flows_latest": request.build_absolute_uri(reverse("flows-latest")),
+        "schema": request.build_absolute_uri(reverse("schema")),
+        "swagger_ui": request.build_absolute_uri(reverse("swagger-ui")),
+        "redoc": request.build_absolute_uri(reverse("redoc")),
     })
 
 
@@ -223,6 +284,35 @@ class CountryCapacityLatestView(APIView):
     """
     GET /api/capacity/latest/?country=CZ[&psr=B16]
     """
+
+    @extend_schema(
+        tags=["Capacity"],
+        summary="Latest capacity snapshot for one country",
+        description="Returns the most recent installed-capacity snapshot available for a single country, optionally filtered by ENTSO-E production type.",
+        parameters=[
+            country_parameter(),
+            psr_parameter(),
+        ],
+        responses={
+            200: CapacityLatestResponseSerializer,
+            400: BAD_REQUEST_RESPONSE,
+        },
+        examples=[
+            OpenApiExample(
+                "Capacity snapshot",
+                response_only=True,
+                value={
+                    "country": "BG",
+                    "year": 2025,
+                    "items": [
+                        {"psr_type": "B16", "psr_name": "Solar", "installed_capacity_mw": "3021.000"},
+                        {"psr_type": "B18", "psr_name": "Wind Offshore", "installed_capacity_mw": "245.500"},
+                    ],
+                },
+            ),
+            INVALID_COUNTRY_EXAMPLE,
+        ],
+    )
     def get(self, request):
         country_q = request.query_params.get("country", "")
         psr = request.query_params.get("psr")
@@ -261,6 +351,54 @@ class CountryCapacityBulkLatestView(APIView):
     """
     MAX_COUNTRIES = 40
 
+    @extend_schema(
+        tags=["Capacity"],
+        summary="Latest capacity snapshot for multiple countries",
+        description="Returns the latest installed-capacity snapshot for each requested country. The `data` object is keyed by country code.",
+        parameters=[
+            countries_parameter(max_items=40),
+            psr_parameter(),
+        ],
+        responses={
+            200: CapacityBulkResponseSerializer,
+            400: BAD_REQUEST_RESPONSE,
+        },
+        examples=[
+            OpenApiExample(
+                "Bulk capacity snapshot",
+                response_only=True,
+                value={
+                    "request_info": {
+                        "countries_requested": ["BG", "RO", "XX"],
+                        "countries_found": ["BG", "RO"],
+                        "countries_ignored": ["XX"],
+                        "psr": "B16",
+                        "total_countries": 2,
+                        "total_records": 2,
+                        "server_elapsed_ms": 8.47,
+                    },
+                    "data": {
+                        "BG": {
+                            "country": "BG",
+                            "year": 2025,
+                            "items": [{"psr_type": "B16", "psr_name": "Solar", "installed_capacity_mw": "3021.000"}],
+                        },
+                        "RO": {
+                            "country": "RO",
+                            "year": 2025,
+                            "items": [{"psr_type": "B16", "psr_name": "Solar", "installed_capacity_mw": "1885.400"}],
+                        },
+                    },
+                },
+            ),
+            OpenApiExample(
+                "Missing countries parameter",
+                response_only=True,
+                status_codes=["400"],
+                value={"detail": "countries parameter is required"},
+            ),
+        ],
+    )
     def get(self, request):
         start_perf = time.perf_counter()
         countries_param = request.query_params.get("countries", "")
@@ -333,6 +471,48 @@ class CountryGenerationYesterdayView(APIView):
     """
     GET /api/generation/yesterday/?country=CZ[&psr=B16][&local=1]
     """
+
+    @extend_schema(
+        tags=["Generation"],
+        summary="Yesterday generation for one country",
+        description="Returns actual generation points for the previous day. Set `local=true` to interpret `yesterday` in the configured Django timezone instead of UTC.",
+        parameters=[
+            country_parameter(),
+            psr_parameter(),
+            LOCAL_PARAMETER,
+        ],
+        responses={
+            200: GenerationRangeResponseSerializer,
+            400: BAD_REQUEST_RESPONSE,
+        },
+        examples=[
+            OpenApiExample(
+                "Yesterday generation",
+                response_only=True,
+                value={
+                    "country": "CZ",
+                    "date_label": "yesterday (UTC)",
+                    "start_utc": "2026-03-09T00:00:00Z",
+                    "end_utc": "2026-03-10T00:00:00Z",
+                    "items": [
+                        {
+                            "datetime_utc": "2026-03-09T00:00:00Z",
+                            "psr_type": "B16",
+                            "psr_name": "Solar",
+                            "generation_mw": "0.000",
+                        },
+                        {
+                            "datetime_utc": "2026-03-09T00:15:00Z",
+                            "psr_type": "B18",
+                            "psr_name": "Wind Offshore",
+                            "generation_mw": "412.600",
+                        },
+                    ],
+                },
+            ),
+            INVALID_COUNTRY_EXAMPLE,
+        ],
+    )
     def get(self, request):
         country_q = request.query_params.get("country", "")
         psr = request.query_params.get("psr")
@@ -389,6 +569,47 @@ class CountryPricesRangeView(APIView):
     GET /api/prices/range/?country=AT&contract=A01&start=...&end=...&resolution=d
     GET /api/prices/range/?country=AT&contract=A01&start=...&end=...&resolution=m
     """
+
+    @extend_schema(
+        tags=["Prices"],
+        summary="Price series for one country",
+        description="Returns country price points for a UTC date window or shortcut period. Results can be aggregated by day, month, or year.",
+        parameters=[
+            country_parameter(),
+            CONTRACT_PARAMETER,
+            period_parameter(allow_yesterday=True, allow_dayahead=True),
+            START_PARAMETER,
+            END_PARAMETER,
+            RESOLUTION_PARAMETER,
+            MONTHLY_FLAG_PARAMETER,
+        ],
+        responses={
+            200: PriceRangeResponseSerializer,
+            400: BAD_REQUEST_RESPONSE,
+        },
+        examples=[
+            OpenApiExample(
+                "Daily price aggregation",
+                response_only=True,
+                value={
+                    "country": "AT",
+                    "contract_type": "A01",
+                    "start_utc": "2026-03-01T00:00:00Z",
+                    "end_utc": "2026-03-03T00:00:00Z",
+                    "items": [
+                        {
+                            "datetime_utc": "2026-03-01T00:00:00Z",
+                            "price": "83.250000",
+                            "currency": "EUR",
+                            "unit": "MWH",
+                            "resolution": "P1D",
+                        }
+                    ],
+                },
+            ),
+            INVALID_RANGE_EXAMPLE,
+        ],
+    )
     def get(self, request):
         iso = request.query_params.get("country", "")
         contract = (request.query_params.get("contract") or "A01").upper()
@@ -503,6 +724,67 @@ class CountryPricesBulkRangeView(APIView):
     """
     MAX_COUNTRIES = 20
 
+    @extend_schema(
+        tags=["Prices"],
+        summary="Price series for multiple countries",
+        description="Returns price time series for several countries in one request. The `data` object is keyed by country code.",
+        parameters=[
+            countries_parameter(max_items=20),
+            CONTRACT_PARAMETER,
+            period_parameter(allow_yesterday=True, allow_dayahead=True),
+            START_PARAMETER,
+            END_PARAMETER,
+            RESOLUTION_PARAMETER,
+            MONTHLY_FLAG_PARAMETER,
+        ],
+        responses={
+            200: PriceBulkResponseSerializer,
+            400: BAD_REQUEST_RESPONSE,
+        },
+        examples=[
+            OpenApiExample(
+                "Bulk price response",
+                response_only=True,
+                value={
+                    "request_info": {
+                        "countries_requested": ["AT", "DE"],
+                        "countries_found": ["AT", "DE"],
+                        "countries_ignored": [],
+                        "contract_type": "A01",
+                        "resolution": "d",
+                        "start_utc": "2026-03-01T00:00:00Z",
+                        "end_utc": "2026-03-03T00:00:00Z",
+                        "total_countries": 2,
+                        "total_records": 4,
+                        "server_elapsed_ms": 12.11,
+                    },
+                    "data": {
+                        "AT": {
+                            "country": "AT",
+                            "contract_type": "A01",
+                            "start_utc": "2026-03-01T00:00:00Z",
+                            "end_utc": "2026-03-03T00:00:00Z",
+                            "items": [
+                                {
+                                    "datetime_utc": "2026-03-01T00:00:00Z",
+                                    "price": "83.250000",
+                                    "currency": "EUR",
+                                    "unit": "MWH",
+                                    "resolution": "P1D",
+                                }
+                            ],
+                        }
+                    },
+                },
+            ),
+            OpenApiExample(
+                "Too many countries",
+                response_only=True,
+                status_codes=["400"],
+                value={"detail": "Maximum 20 countries per request"},
+            ),
+        ],
+    )
     def get(self, request):
         start_perf = time.perf_counter()
         countries_param = request.query_params.get("countries", "")
@@ -697,6 +979,48 @@ class CountryGenerationRangeView(APIView):
     GET /api/generation/range/?country=CZ&start=...&end=...[&psr=B16]&resolution=d
     GET /api/generation/range/?country=CZ&start=...&end=...[&psr=B16]&resolution=m
     """
+
+    @extend_schema(
+        tags=["Generation"],
+        summary="Actual generation range for one country",
+        description="Returns actual generation values for one country. Supports shortcut periods or an explicit range, plus optional PSR filtering and daily/monthly/yearly aggregation.",
+        parameters=[
+            country_parameter(),
+            psr_parameter(),
+            LOCAL_PARAMETER,
+            period_parameter(),
+            START_PARAMETER,
+            END_PARAMETER,
+            RESOLUTION_PARAMETER,
+            MONTHLY_FLAG_PARAMETER,
+        ],
+        responses={
+            200: GenerationRangeResponseSerializer,
+            400: BAD_REQUEST_RESPONSE,
+        },
+        examples=[
+            OpenApiExample(
+                "Monthly generation aggregation",
+                response_only=True,
+                value={
+                    "country": "CZ",
+                    "date_label": "custom range",
+                    "start_utc": "2026-01-01T00:00:00Z",
+                    "end_utc": "2026-03-01T00:00:00Z",
+                    "items": [
+                        {
+                            "datetime_utc": "2026-01-01T00:00:00Z",
+                            "psr_type": "B16",
+                            "psr_name": "Solar",
+                            "generation_mw": "114.320",
+                            "resolution": "P1M",
+                        }
+                    ],
+                },
+            ),
+            INVALID_RANGE_EXAMPLE,
+        ],
+    )
     def get(self, request):
         country_q = request.query_params.get("country", "")
         psr = request.query_params.get("psr")
@@ -819,6 +1143,48 @@ class CountryGenerationResRangeView(APIView):
     GET /api/generation-res/range/?country=CZ&period=today|yesterday[&psr=B16][&local=1]
     GET /api/generation-res/range/?country=CZ&start=...&end=...[&psr=B16]
     """
+
+    @extend_schema(
+        tags=["Generation"],
+        summary="Renewable generation range for one country",
+        description="Returns renewable generation by production type. The `psr` parameter may contain one code or a comma-separated list.",
+        parameters=[
+            country_parameter(),
+            psr_parameter(allow_multiple=True),
+            LOCAL_PARAMETER,
+            period_parameter(),
+            START_PARAMETER,
+            END_PARAMETER,
+        ],
+        responses={
+            200: ResGenerationResponseSerializer,
+            400: BAD_REQUEST_RESPONSE,
+        },
+        examples=[
+            OpenApiExample(
+                "Renewable generation response",
+                response_only=True,
+                value={
+                    "country": "BG",
+                    "date_label": "today (UTC)",
+                    "start_utc": "2026-03-10T00:00:00Z",
+                    "end_utc": "2026-03-11T00:00:00Z",
+                    "items": [
+                        {
+                            "country": "BG",
+                            "datetime_utc": "2026-03-10T09:00:00Z",
+                            "psr_type": "B16",
+                            "psr_name": "Solar",
+                            "generation_mw": "812.120",
+                            "unit": "MW",
+                            "resolution": "PT60M",
+                        }
+                    ],
+                },
+            ),
+            INVALID_COUNTRY_EXAMPLE,
+        ],
+    )
     def get(self, request):
         country_q = request.query_params.get("country", "")
         psr_param = request.query_params.get("psr")
@@ -874,6 +1240,45 @@ class CountryGenerationResRangeView(APIView):
 class CountryGenerationForecastRangeView(APIView):
     """GET /api/generation-forecast/range/?country=CZ&period=today|..."""
 
+    @extend_schema(
+        tags=["Generation"],
+        summary="Generation forecast range for one country",
+        description="Returns forecast generation by production type for a country, using shortcut periods or an explicit UTC range.",
+        parameters=[
+            country_parameter(),
+            psr_parameter(),
+            period_parameter(),
+            START_PARAMETER,
+            END_PARAMETER,
+        ],
+        responses={
+            200: GenerationForecastResponseSerializer,
+            400: BAD_REQUEST_RESPONSE,
+        },
+        examples=[
+            OpenApiExample(
+                "Generation forecast response",
+                response_only=True,
+                value={
+                    "country": "CZ",
+                    "date_label": "today (UTC)",
+                    "start_utc": "2026-03-10T00:00:00Z",
+                    "end_utc": "2026-03-11T00:00:00Z",
+                    "items": [
+                        {
+                            "country": "CZ",
+                            "datetime_utc": "2026-03-10T10:00:00Z",
+                            "psr_type": "B16",
+                            "psr_name": "Solar",
+                            "forecast_mw": "920.440",
+                            "resolution": "PT60M",
+                        }
+                    ],
+                },
+            ),
+            INVALID_RANGE_EXAMPLE,
+        ],
+    )
     def get(self, request):
         country_q = request.query_params.get("country", "")
         psr = request.query_params.get("psr")
@@ -931,6 +1336,68 @@ class CountryGenerationBulkRangeView(APIView):
     """
     MAX_COUNTRIES = 20
 
+    @extend_schema(
+        tags=["Generation"],
+        summary="Actual generation range for multiple countries",
+        description="Returns actual generation for several countries in one request. The `data` object is keyed by country code.",
+        parameters=[
+            countries_parameter(max_items=20),
+            psr_parameter(),
+            LOCAL_PARAMETER,
+            period_parameter(),
+            START_PARAMETER,
+            END_PARAMETER,
+            RESOLUTION_PARAMETER,
+            MONTHLY_FLAG_PARAMETER,
+        ],
+        responses={
+            200: GenerationBulkResponseSerializer,
+            400: BAD_REQUEST_RESPONSE,
+        },
+        examples=[
+            OpenApiExample(
+                "Bulk generation response",
+                response_only=True,
+                value={
+                    "request_info": {
+                        "countries_requested": ["BG", "RO"],
+                        "countries_found": ["BG", "RO"],
+                        "countries_ignored": [],
+                        "psr": "B16",
+                        "resolution": "d",
+                        "start_utc": "2026-03-01T00:00:00Z",
+                        "end_utc": "2026-03-03T00:00:00Z",
+                        "date_label": "custom range",
+                        "total_countries": 2,
+                        "total_records": 4,
+                    },
+                    "data": {
+                        "BG": {
+                            "country": "BG",
+                            "date_label": "custom range",
+                            "start_utc": "2026-03-01T00:00:00Z",
+                            "end_utc": "2026-03-03T00:00:00Z",
+                            "items": [
+                                {
+                                    "datetime_utc": "2026-03-01T00:00:00Z",
+                                    "psr_type": "B16",
+                                    "psr_name": "Solar",
+                                    "generation_mw": "614.210",
+                                    "resolution": "P1D",
+                                }
+                            ],
+                        }
+                    },
+                },
+            ),
+            OpenApiExample(
+                "Too many countries",
+                response_only=True,
+                status_codes=["400"],
+                value={"detail": "Maximum 20 countries per request"},
+            ),
+        ],
+    )
     def get(self, request):
         countries_param = request.query_params.get("countries", "")
         psr = request.query_params.get("psr")
@@ -1095,6 +1562,48 @@ class PhysicalFlowsRangeView(APIView):
       - to=RO    (target country)
       - countries=BG,RO (both directions among listed)
     """
+
+    @extend_schema(
+        tags=["Flows"],
+        summary="Physical flow range",
+        description="Returns cross-border physical flows for a period or explicit UTC window. Results can be filtered by source country, destination country, or a country set.",
+        parameters=[
+            period_parameter(),
+            START_PARAMETER,
+            END_PARAMETER,
+            FLOW_FROM_PARAMETER,
+            FLOW_TO_PARAMETER,
+            countries_parameter(required=False),
+        ],
+        responses={
+            200: PhysicalFlowsRangeResponseSerializer,
+            400: BAD_REQUEST_RESPONSE,
+        },
+        examples=[
+            OpenApiExample(
+                "Flow range response",
+                response_only=True,
+                value={
+                    "start_utc": "2026-03-10T00:00:00Z",
+                    "end_utc": "2026-03-10T03:00:00Z",
+                    "count": 2,
+                    "items": [
+                        {
+                            "datetime_utc": "2026-03-10T01:00:00Z",
+                            "country_from": "BG",
+                            "country_to": "RO",
+                            "out_domain_eic": "10YCA-BULGARIA-R",
+                            "in_domain_eic": "10YRO-TEL------P",
+                            "resolution": "PT60M",
+                            "quantity_mw": 421.5,
+                            "created_at": "2026-03-10T01:05:00Z",
+                        }
+                    ],
+                },
+            ),
+            INVALID_RANGE_EXAMPLE,
+        ],
+    )
     def get(self, request):
         period   = request.query_params.get("period")
         start_s  = request.query_params.get("start")
@@ -1182,6 +1691,47 @@ class PhysicalFlowsLatestView(APIView):
       -> returns latest hour window [t-1h, t) flows touching BG,
          with simple in/out totals; optionally grouped by neighbor.
     """
+
+    @extend_schema(
+        tags=["Flows"],
+        summary="Latest physical flow window for one country",
+        description="Returns the latest available hourly flow window touching the requested country, plus inbound/outbound totals and optional neighbor breakdowns.",
+        parameters=[
+            country_parameter(),
+            NEIGHBORS_PARAMETER,
+        ],
+        responses={
+            200: PhysicalFlowsLatestResponseSerializer,
+            400: BAD_REQUEST_RESPONSE,
+        },
+        examples=[
+            OpenApiExample(
+                "Latest flow response",
+                response_only=True,
+                value={
+                    "country": "BG",
+                    "start_utc": "2026-03-10T09:00:00Z",
+                    "end_utc": "2026-03-10T10:00:00Z",
+                    "count": 2,
+                    "items": [
+                        {
+                            "datetime_utc": "2026-03-10T09:00:00Z",
+                            "country_from": "BG",
+                            "country_to": "RO",
+                            "out_domain_eic": "10YCA-BULGARIA-R",
+                            "in_domain_eic": "10YRO-TEL------P",
+                            "resolution": "PT60M",
+                            "quantity_mw": 320.0,
+                            "created_at": "2026-03-10T09:03:00Z",
+                        }
+                    ],
+                    "totals": {"in_mw": 180.0, "out_mw": 320.0, "net_mw": -140.0},
+                    "neighbors": [{"neighbor": "RO", "in_mw": 180.0, "out_mw": 320.0, "net_mw": -140.0}],
+                },
+            ),
+            INVALID_COUNTRY_EXAMPLE,
+        ],
+    )
     def get(self, request):
         country_q = (request.query_params.get("country") or "").upper().strip()
         with_neighbors = _bool_param(request, "neighbors")
@@ -1223,8 +1773,8 @@ class PhysicalFlowsLatestView(APIView):
 
         for row in items:
             val = float(row.get(mw_key, 0) or 0)
-            src = row.get(src_field) or row.get("source_country") or row.get("from_country") or row.get("country_from")
-            dst = row.get(dst_field) or row.get("target_country") or row.get("to_country")   or row.get("country_to")
+            src = row.get(src_field) or row.get("country_from") or row.get("source_country") or row.get("from_country")
+            dst = row.get(dst_field) or row.get("country_to") or row.get("target_country") or row.get("to_country")
             if src == country.pk:
                 out_total += val
             elif dst == country.pk:
@@ -1243,8 +1793,8 @@ class PhysicalFlowsLatestView(APIView):
             by_neighbor: Dict[str, Dict[str, float]] = {}
             for row in items:
                 val = float(row.get(mw_key, 0) or 0)
-                src = row.get(src_field) or row.get("source_country") or row.get("from_country") or row.get("country_from")
-                dst = row.get(dst_field) or row.get("target_country") or row.get("to_country")   or row.get("country_to")
+                src = row.get(src_field) or row.get("country_from") or row.get("source_country") or row.get("from_country")
+                dst = row.get(dst_field) or row.get("country_to") or row.get("target_country") or row.get("to_country")
                 if src == country.pk:
                     neighbor = dst
                     by_neighbor.setdefault(neighbor, {"in_mw": 0.0, "out_mw": 0.0})

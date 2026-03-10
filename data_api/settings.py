@@ -13,10 +13,13 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 from pathlib import Path
 import os
 from celery.schedules import crontab
+from dotenv import load_dotenv
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+load_dotenv(BASE_DIR / ".env")
 
 
 # Quick-start development settings - unsuitable for production
@@ -63,11 +66,14 @@ INSTALLED_APPS = [
     "corsheaders",
     'entsoe_api',
     'rest_framework',
+    'drf_spectacular',
+    'drf_spectacular_sidecar',
     'django_filters',   
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -100,6 +106,7 @@ WSGI_APPLICATION = 'data_api.wsgi.application'
 
 
 REST_FRAMEWORK = {
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_FILTER_BACKENDS": [
         "django_filters.rest_framework.DjangoFilterBackend",
         "rest_framework.filters.OrderingFilter",
@@ -107,6 +114,28 @@ REST_FRAMEWORK = {
     # # optional pagination (nice for big lists)
     # "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     # "PAGE_SIZE": 100,
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "ENTSO-E Data API",
+    "DESCRIPTION": (
+        "REST API for ENTSO-E capacity, generation, price, and cross-border flow data. "
+        "Use `/api/schema/` for the OpenAPI schema, `/api/docs/swagger/` to try endpoints, "
+        "and `/api/docs/redoc/` for the reference documentation."
+    ),
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "SCHEMA_PATH_PREFIX": r"/api",
+    "SWAGGER_UI_DIST": "SIDECAR",
+    "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
+    "REDOC_DIST": "SIDECAR",
+    "TAGS": [
+        {"name": "Meta", "description": "Discovery and documentation endpoints."},
+        {"name": "Capacity", "description": "Installed generation capacity snapshots."},
+        {"name": "Prices", "description": "Country price time series and aggregates."},
+        {"name": "Generation", "description": "Actual and forecast generation endpoints."},
+        {"name": "Flows", "description": "Cross-border physical power flows."},
+    ],
 }
 
 
@@ -222,7 +251,16 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
