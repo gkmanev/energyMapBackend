@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 WORKDIR /tmp/build
 RUN python -m pip install --upgrade pip wheel setuptools
 COPY requirements.txt .
-RUN pip wheel --no-cache-dir --no-deps --wheel-dir /tmp/wheels -r requirements.txt
+RUN pip wheel --no-cache-dir --wheel-dir /tmp/wheels -r requirements.txt
 
 # -------- runtime --------
 FROM python:3.12-slim
@@ -33,7 +33,7 @@ RUN mkdir -p $APP_HOME
 WORKDIR $APP_HOME
 COPY --from=builder /tmp/wheels /wheels
 COPY --from=builder /tmp/build/requirements.txt /tmp/requirements.txt
-RUN python -m pip install --no-cache-dir /wheels/*
+RUN python -m pip install --no-cache-dir --find-links=/wheels -r /tmp/requirements.txt
 COPY . $APP_HOME
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
