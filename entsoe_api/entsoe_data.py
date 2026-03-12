@@ -33,6 +33,7 @@ PSRTYPE_MAPPINGS: Dict[str, str] = {
     "B18": "Wind Offshore",
     "B19": "Wind Onshore",
     "B20": "Other",
+    "B99": "BESS Charging",
     # Leave unknown codes unmapped; they will show up as the code itself (e.g., "B25").
 }
 
