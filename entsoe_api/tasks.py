@@ -92,3 +92,10 @@ def fetch_flows_hourly_task(self):
     """Fetch flows for all countries."""
     logger.info("Hourly flows window: Last 48")
     call_command("fetch_flows", all_eu=True, hours=48)
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def fetch_generation_eso_bg_quarter_hourly_task(self):
+    """Fetch BG generation snapshots from the ESO BG endpoint every 15 minutes."""
+    logger.info("Running BG ESO generation fetch task")
+    call_command("fetch_generation_eso_bg")
