@@ -5,6 +5,8 @@ from .views import (
     CountryCapacityLatestView,
     CountryGenerationBulkRangeView,
     CountryGenerationForecastRangeView,
+    CountryTiltedIrradianceBulkRangeView,
+    CountryTiltedIrradianceRangeView,
     CountryGenerationRangeView,
     CountryGenerationResRangeView,
     CountryGenerationYesterdayView,
@@ -27,6 +29,8 @@ urlpatterns = [
     path('api/generation-res/range/', CountryGenerationResRangeView.as_view(), name='generation-res-range'),
     path('api/generation/bulk-range/', CountryGenerationBulkRangeView.as_view(), name='generation-bulk-range'),
     path('api/generation-forecast/range/', CountryGenerationForecastRangeView.as_view(), name='generation-forecast-range'),
+    path('api/generation-irradiance/range/', CountryTiltedIrradianceRangeView.as_view(), name='generation-irradiance-range'),
+    path('api/generation-irradiance/bulk-range/', CountryTiltedIrradianceBulkRangeView.as_view(), name='generation-irradiance-bulk-range'),
     path("api/flows/range/",  PhysicalFlowsRangeView.as_view(),  name="flows-range"),
     path("api/flows/latest/", PhysicalFlowsLatestView.as_view(), name="flows-latest"),
 ]

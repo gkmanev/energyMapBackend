@@ -14,6 +14,9 @@ django-cors-headers
 django-filter==25.2
 whitenoise
 requests
+openmeteo-requests
+requests-cache
+retry-requests
 paho-mqtt==1.6.1
 pytz
 django-redis

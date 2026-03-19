@@ -413,3 +413,34 @@ ENTSOE_CAPACITY_EIC_OVERRIDES = {
     "SE": "10YSE-1--------K",   # Svenska kraftnät — country level only
     "IT": "10YIT-GRTN-----B",   # Terna — country level only
 }
+
+
+COUNTRY_COORDS = [
+  { "code": "AT", "lat": 47.5162, "lng": 14.5501 },
+  { "code": "BE", "lat": 50.5039, "lng": 4.4699 },
+  { "code": "BG", "lat": 42.7339, "lng": 25.4858 },
+  { "code": "HR", "lat": 45.1000, "lng": 15.2000 },
+  { "code": "CY", "lat": 35.1264, "lng": 33.4299 },
+  { "code": "CZ", "lat": 49.8175, "lng": 15.4730 },
+  { "code": "DK", "lat": 56.2639, "lng": 9.5018 },
+  { "code": "EE", "lat": 58.5953, "lng": 25.0136 },
+  { "code": "FI", "lat": 61.9241, "lng": 25.7482 },
+  { "code": "FR", "lat": 46.2276, "lng": 2.2137 },
+  { "code": "DE", "lat": 51.1657, "lng": 10.4515 },
+  { "code": "GR", "lat": 39.0742, "lng": 21.8243 },
+  { "code": "HU", "lat": 47.1625, "lng": 19.5033 },
+  { "code": "IE", "lat": 53.1424, "lng": -7.6921 },
+  { "code": "IT", "lat": 41.8719, "lng": 12.5674 },
+  { "code": "LV", "lat": 56.8796, "lng": 24.6032 },
+  { "code": "LT", "lat": 55.1694, "lng": 23.8813 },
+  { "code": "LU", "lat": 49.8153, "lng": 6.1296 },
+  { "code": "MT", "lat": 35.9375, "lng": 14.3754 },
+  { "code": "NL", "lat": 52.1326, "lng": 5.2913 },
+  { "code": "PL", "lat": 51.9194, "lng": 19.1451 },
+  { "code": "PT", "lat": 39.3999, "lng": -8.2245 },
+  { "code": "RO", "lat": 45.9432, "lng": 24.9668 },
+  { "code": "SK", "lat": 48.6690, "lng": 19.6990 },
+  { "code": "SI", "lat": 46.1512, "lng": 14.9955 },
+  { "code": "ES", "lat": 40.4637, "lng": -3.7492 },
+  { "code": "SE", "lat": 60.1282, "lng": 18.6435 }
+]

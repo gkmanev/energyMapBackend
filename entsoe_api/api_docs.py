@@ -6,6 +6,7 @@ from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiRespo
 from .serializers import (
     CountryGenerationForecastByTypeSerializer,
     CountryResGenerationByTypeSerializer,
+    CountryTiltedIrradiancePointSerializer,
     PhysicalFlowSerializer,
 )
 
@@ -127,6 +128,24 @@ RESOLUTION_PARAMETER = OpenApiParameter(
 )
 
 
+TILT_PARAMETER = OpenApiParameter(
+    name="tilt",
+    type=OpenApiTypes.NUMBER,
+    location=OpenApiParameter.QUERY,
+    required=False,
+    description="Panel tilt in degrees. Defaults to `30`.",
+)
+
+
+AZIMUTH_PARAMETER = OpenApiParameter(
+    name="azimuth",
+    type=OpenApiTypes.NUMBER,
+    location=OpenApiParameter.QUERY,
+    required=False,
+    description="Panel azimuth in degrees. Defaults to `0` (south-facing).",
+)
+
+
 MONTHLY_FLAG_PARAMETER = OpenApiParameter(
     name="m",
     type=OpenApiTypes.BOOL,
@@ -183,6 +202,8 @@ class ApiRootResponseSerializer(serializers.Serializer):
     generation_res_range = serializers.URLField()
     generation_bulk_range = serializers.URLField()
     generation_forecast_range = serializers.URLField()
+    generation_irradiance_range = serializers.URLField()
+    generation_irradiance_bulk_range = serializers.URLField()
     flows_range = serializers.URLField()
     flows_latest = serializers.URLField()
     schema = serializers.URLField()
@@ -297,6 +318,36 @@ class GenerationForecastResponseSerializer(serializers.Serializer):
     start_utc = serializers.DateTimeField()
     end_utc = serializers.DateTimeField()
     items = CountryGenerationForecastByTypeSerializer(many=True)
+
+
+class TiltedIrradianceResponseSerializer(serializers.Serializer):
+    country = serializers.CharField()
+    date_label = serializers.CharField()
+    start_utc = serializers.DateTimeField()
+    end_utc = serializers.DateTimeField()
+    tilt_degrees = serializers.FloatField()
+    azimuth_degrees = serializers.FloatField()
+    items = CountryTiltedIrradiancePointSerializer(many=True)
+
+
+class TiltedIrradianceBulkRequestInfoSerializer(serializers.Serializer):
+    countries_requested = serializers.ListField(child=serializers.CharField())
+    countries_found = serializers.ListField(child=serializers.CharField())
+    countries_ignored = serializers.ListField(child=serializers.CharField())
+    tilt_degrees = serializers.FloatField()
+    azimuth_degrees = serializers.FloatField()
+    start_utc = serializers.DateTimeField()
+    end_utc = serializers.DateTimeField()
+    date_label = serializers.CharField()
+    total_countries = serializers.IntegerField()
+    total_records = serializers.IntegerField()
+
+
+class TiltedIrradianceBulkResponseSerializer(serializers.Serializer):
+    request_info = TiltedIrradianceBulkRequestInfoSerializer()
+    data = serializers.JSONField(
+        help_text="Object keyed by country ISO code. Each value matches the single-country irradiance response shape."
+    )
 
 
 class ResGenerationResponseSerializer(serializers.Serializer):

@@ -8,6 +8,7 @@ from .models import (
     CountryGenerationByType,
     CountryResGenerationByType,
     CountryGenerationForecastByType,
+    CountryTiltedIrradiancePoint,
     CountryPricePoint,
     PhysicalFlow,
 )
@@ -121,6 +122,48 @@ def save_generation_forecast_df(df) -> int:
         )
         n += 1
     return n
+
+
+@transaction.atomic
+def save_country_tilted_irradiance_df(df: pd.DataFrame) -> int:
+    """Persist hourly Open-Meteo tilted irradiance rows."""
+
+    if df is None or df.empty:
+        return 0
+
+    required = {"country", "datetime_utc", "tilt_degrees", "irradiance_wm2"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing columns {missing} for CountryTiltedIrradiancePoint")
+
+    df = df.copy()
+    df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True)
+
+    n = 0
+    for r in df.to_dict(orient="records"):
+        c = _get_or_create_country(r["country"])
+        irradiance_value = r.get("irradiance_wm2")
+        if pd.isna(irradiance_value):
+            irradiance_value = None
+
+        azimuth_value = r.get("azimuth_degrees")
+        if pd.isna(azimuth_value):
+            azimuth_value = 0
+
+        CountryTiltedIrradiancePoint.objects.update_or_create(
+            country=c,
+            datetime_utc=_ensure_aware_utc(r["datetime_utc"]),
+            tilt_degrees=r["tilt_degrees"],
+            azimuth_degrees=azimuth_value,
+            defaults={
+                "irradiance_wm2": irradiance_value,
+                "resolution": r.get("resolution") or "",
+            },
+        )
+        n += 1
+
+    return n
+
 
 @transaction.atomic
 def save_generation_res_df(df) -> int:

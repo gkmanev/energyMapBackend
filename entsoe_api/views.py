@@ -27,15 +27,18 @@ from .models import (
     CountryGenerationByType,
     CountryResGenerationByType,
     CountryGenerationForecastByType,
+    CountryTiltedIrradiancePoint,
     CountryPricePoint,
     PhysicalFlow,
 )
 from entsoe_api.serializers import (
     CountryGenerationForecastByTypeSerializer,
     CountryResGenerationByTypeSerializer,
+    CountryTiltedIrradiancePointSerializer,
     PhysicalFlowSerializer,
 )
 from .api_docs import (
+    AZIMUTH_PARAMETER,
     ApiRootResponseSerializer,
     BAD_REQUEST_RESPONSE,
     CapacityBulkResponseSerializer,
@@ -63,6 +66,9 @@ from .api_docs import (
     RESOLUTION_PARAMETER,
     ResGenerationResponseSerializer,
     START_PARAMETER,
+    TILT_PARAMETER,
+    TiltedIrradianceBulkResponseSerializer,
+    TiltedIrradianceResponseSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -145,6 +151,18 @@ def _validate_countries_or_400(codes: Iterable[str]) -> List[str]:
     if missing:
         raise ValueError(f"Unknown countries: {', '.join(missing)}")
     return valid
+
+
+def _configured_irradiance_country_codes() -> List[str]:
+    raw_coords = getattr(settings, "COUNTRY_COORDS", None)
+    if not isinstance(raw_coords, list):
+        return []
+
+    return sorted({
+        str(item.get("code") or "").upper().strip()
+        for item in raw_coords
+        if isinstance(item, dict) and str(item.get("code") or "").strip()
+    })
 
 def _now_utc() -> dt.datetime:
     return dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
@@ -248,6 +266,8 @@ def _flow_field_names() -> Tuple[str, str, str]:
                 "generation_res_range": "https://api.example.com/api/generation-res/range/",
                 "generation_bulk_range": "https://api.example.com/api/generation/bulk-range/",
                 "generation_forecast_range": "https://api.example.com/api/generation-forecast/range/",
+                "generation_irradiance_range": "https://api.example.com/api/generation-irradiance/range/",
+                "generation_irradiance_bulk_range": "https://api.example.com/api/generation-irradiance/bulk-range/",
                 "flows_range": "https://api.example.com/api/flows/range/",
                 "flows_latest": "https://api.example.com/api/flows/latest/",
                 "schema": "https://api.example.com/api/schema/",
@@ -269,6 +289,8 @@ def api_root(request, format=None):
         "generation_res_range": request.build_absolute_uri(reverse("generation-res-range")),
         "generation_bulk_range": request.build_absolute_uri(reverse("generation-bulk-range")),
         "generation_forecast_range": request.build_absolute_uri(reverse("generation-forecast-range")),
+        "generation_irradiance_range": request.build_absolute_uri(reverse("generation-irradiance-range")),
+        "generation_irradiance_bulk_range": request.build_absolute_uri(reverse("generation-irradiance-bulk-range")),
         "flows_range": request.build_absolute_uri(reverse("flows-range")),
         "flows_latest": request.build_absolute_uri(reverse("flows-latest")),
         "schema": request.build_absolute_uri(reverse("schema")),
@@ -1322,6 +1344,291 @@ class CountryGenerationForecastRangeView(APIView):
             "start_utc": _fmt_z(start_utc),
             "end_utc": _fmt_z(end_utc),
             "items": serializer.data,
+        }, status=200)
+
+
+@method_decorator(cache_page(600), name="get")
+class CountryTiltedIrradianceRangeView(APIView):
+    """GET /api/generation-irradiance/range/?country=BG&period=today[&tilt=30][&azimuth=0]"""
+
+    @extend_schema(
+        tags=["Generation"],
+        summary="Global tilted irradiance range for one country",
+        description=(
+            "Returns hourly Open-Meteo global tilted irradiance points for one country. "
+            "The query is filtered by panel geometry using `tilt` and `azimuth`."
+        ),
+        parameters=[
+            country_parameter(),
+            period_parameter(),
+            START_PARAMETER,
+            END_PARAMETER,
+            TILT_PARAMETER,
+            AZIMUTH_PARAMETER,
+        ],
+        responses={
+            200: TiltedIrradianceResponseSerializer,
+            400: BAD_REQUEST_RESPONSE,
+        },
+        examples=[
+            OpenApiExample(
+                "Tilted irradiance response",
+                response_only=True,
+                value={
+                    "country": "BG",
+                    "date_label": "today (UTC)",
+                    "start_utc": "2026-03-19T00:00:00Z",
+                    "end_utc": "2026-03-20T00:00:00Z",
+                    "tilt_degrees": 30.0,
+                    "azimuth_degrees": 0.0,
+                    "items": [
+                        {
+                            "country": "BG",
+                            "datetime_utc": "2026-03-19T10:00:00Z",
+                            "tilt_degrees": "30.00",
+                            "azimuth_degrees": "0.00",
+                            "irradiance_wm2": 612.4,
+                            "resolution": "PT1H",
+                        }
+                    ],
+                },
+            ),
+            INVALID_COUNTRY_EXAMPLE,
+            INVALID_RANGE_EXAMPLE,
+        ],
+    )
+    def get(self, request):
+        country_q = request.query_params.get("country", "")
+        period = request.query_params.get("period")
+        start_s = request.query_params.get("start")
+        end_s = request.query_params.get("end")
+
+        try:
+            tilt = float(request.query_params.get("tilt", 30))
+        except (TypeError, ValueError):
+            return Response({"detail": "tilt must be a number."}, status=400)
+
+        try:
+            azimuth = float(request.query_params.get("azimuth", 0))
+        except (TypeError, ValueError):
+            return Response({"detail": "azimuth must be a number."}, status=400)
+
+        try:
+            country = _get_country_or_400(country_q)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=400)
+
+        try:
+            start_utc, end_utc, label = _compute_window_utc(
+                period,
+                start_s,
+                end_s,
+                allow_yesterday=True,
+                align_to_15min=False,
+            )
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=400)
+
+        if start_utc >= end_utc:
+            return Response({"detail": "start must be earlier than end."}, status=400)
+
+        qs = (
+            CountryTiltedIrradiancePoint.objects
+            .filter(
+                country=country,
+                datetime_utc__gte=start_utc,
+                datetime_utc__lt=end_utc,
+                tilt_degrees=tilt,
+                azimuth_degrees=azimuth,
+            )
+            .order_by("datetime_utc")
+        )
+        serializer = CountryTiltedIrradiancePointSerializer(qs, many=True)
+
+        return Response({
+            "country": country.pk,
+            "date_label": label,
+            "start_utc": _fmt_z(start_utc),
+            "end_utc": _fmt_z(end_utc),
+            "tilt_degrees": tilt,
+            "azimuth_degrees": azimuth,
+            "items": serializer.data,
+        }, status=200)
+
+
+@method_decorator(cache_page(600), name="get")
+class CountryTiltedIrradianceBulkRangeView(APIView):
+    """GET /api/generation-irradiance/bulk-range/?countries=ALL&period=today[&tilt=30][&azimuth=0]"""
+
+    MAX_COUNTRIES = 60
+
+    @extend_schema(
+        tags=["Generation"],
+        summary="Global tilted irradiance range for multiple countries",
+        description=(
+            "Returns hourly Open-Meteo global tilted irradiance points for multiple countries. "
+            "Use `countries=ALL` or omit the parameter to include all configured countries from `COUNTRY_COORDS`."
+        ),
+        parameters=[
+            countries_parameter(required=False, max_items=60),
+            period_parameter(),
+            START_PARAMETER,
+            END_PARAMETER,
+            TILT_PARAMETER,
+            AZIMUTH_PARAMETER,
+        ],
+        responses={
+            200: TiltedIrradianceBulkResponseSerializer,
+            400: BAD_REQUEST_RESPONSE,
+        },
+        examples=[
+            OpenApiExample(
+                "Bulk tilted irradiance response",
+                response_only=True,
+                value={
+                    "request_info": {
+                        "countries_requested": ["BG", "RO"],
+                        "countries_found": ["BG", "RO"],
+                        "countries_ignored": [],
+                        "tilt_degrees": 30.0,
+                        "azimuth_degrees": 0.0,
+                        "start_utc": "2026-03-19T00:00:00Z",
+                        "end_utc": "2026-03-20T00:00:00Z",
+                        "date_label": "today (UTC)",
+                        "total_countries": 2,
+                        "total_records": 48,
+                    },
+                    "data": {
+                        "BG": {
+                            "country": "BG",
+                            "date_label": "today (UTC)",
+                            "start_utc": "2026-03-19T00:00:00Z",
+                            "end_utc": "2026-03-20T00:00:00Z",
+                            "tilt_degrees": 30.0,
+                            "azimuth_degrees": 0.0,
+                            "items": [
+                                {
+                                    "country": "BG",
+                                    "datetime_utc": "2026-03-19T10:00:00Z",
+                                    "tilt_degrees": "30.00",
+                                    "azimuth_degrees": "0.00",
+                                    "irradiance_wm2": 612.4,
+                                    "resolution": "PT1H",
+                                }
+                            ],
+                        }
+                    },
+                },
+            ),
+            OpenApiExample(
+                "Too many countries",
+                response_only=True,
+                status_codes=["400"],
+                value={"detail": "Maximum 60 countries per request"},
+            ),
+        ],
+    )
+    def get(self, request):
+        countries_param = request.query_params.get("countries", "")
+        period = request.query_params.get("period")
+        start_s = request.query_params.get("start")
+        end_s = request.query_params.get("end")
+
+        try:
+            tilt = float(request.query_params.get("tilt", 30))
+        except (TypeError, ValueError):
+            return Response({"detail": "tilt must be a number."}, status=400)
+
+        try:
+            azimuth = float(request.query_params.get("azimuth", 0))
+        except (TypeError, ValueError):
+            return Response({"detail": "azimuth must be a number."}, status=400)
+
+        requested_all = not countries_param or countries_param.strip().upper() == "ALL"
+        country_codes = _configured_irradiance_country_codes() if requested_all else _split_codes(countries_param)
+
+        if not country_codes:
+            return Response({"detail": "countries parameter is required or COUNTRY_COORDS must be configured"}, status=400)
+        if len(country_codes) > self.MAX_COUNTRIES:
+            return Response({"detail": f"Maximum {self.MAX_COUNTRIES} countries per request"}, status=400)
+
+        try:
+            start_utc, end_utc, label = _compute_window_utc(
+                period,
+                start_s,
+                end_s,
+                allow_yesterday=True,
+                align_to_15min=False,
+            )
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=400)
+
+        if start_utc >= end_utc:
+            return Response({"detail": "start must be earlier than end."}, status=400)
+
+        valid_countries, missing_countries = _partition_country_codes(country_codes)
+        if not valid_countries and not requested_all:
+            return Response({"detail": f"Unknown countries: {', '.join(missing_countries)}"}, status=400)
+
+        results: Dict[str, dict] = {
+            code: {
+                "country": code,
+                "date_label": label,
+                "start_utc": _fmt_z(start_utc),
+                "end_utc": _fmt_z(end_utc),
+                "tilt_degrees": tilt,
+                "azimuth_degrees": azimuth,
+                "items": [],
+            }
+            for code in valid_countries
+        }
+
+        total_records = 0
+        if valid_countries:
+            qs = (
+                CountryTiltedIrradiancePoint.objects
+                .filter(
+                    country_id__in=valid_countries,
+                    datetime_utc__gte=start_utc,
+                    datetime_utc__lt=end_utc,
+                    tilt_degrees=tilt,
+                    azimuth_degrees=azimuth,
+                )
+                .order_by("country_id", "datetime_utc")
+            )
+
+            for row in qs.values(
+                "country_id",
+                "datetime_utc",
+                "tilt_degrees",
+                "azimuth_degrees",
+                "irradiance_wm2",
+                "resolution",
+            ):
+                results[row["country_id"]]["items"].append({
+                    "country": row["country_id"],
+                    "datetime_utc": _fmt_z(row["datetime_utc"]),
+                    "tilt_degrees": row["tilt_degrees"],
+                    "azimuth_degrees": row["azimuth_degrees"],
+                    "irradiance_wm2": row["irradiance_wm2"],
+                    "resolution": row["resolution"],
+                })
+                total_records += 1
+
+        return Response({
+            "request_info": {
+                "countries_requested": country_codes,
+                "countries_found": valid_countries,
+                "countries_ignored": missing_countries,
+                "tilt_degrees": tilt,
+                "azimuth_degrees": azimuth,
+                "start_utc": _fmt_z(start_utc),
+                "end_utc": _fmt_z(end_utc),
+                "date_label": label,
+                "total_countries": len(results),
+                "total_records": total_records,
+            },
+            "data": results,
         }, status=200)
 
 

@@ -121,6 +121,37 @@ class CountryGenerationForecastByType(models.Model):
         return f"{self.country_id} {self.psr_type} {self.datetime_utc:%Y-%m-%d %H:%MZ} forecast"
 
 
+class CountryTiltedIrradiancePoint(models.Model):
+    """Open-Meteo hourly global tilted irradiance forecast per country."""
+
+    country = models.ForeignKey(
+        Country,
+        on_delete=models.PROTECT,
+        related_name="tilted_irradiance_country",
+    )
+
+    datetime_utc = models.DateTimeField(db_index=True)
+    tilt_degrees = models.DecimalField(max_digits=5, decimal_places=2)
+    azimuth_degrees = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    irradiance_wm2 = models.FloatField(null=True, blank=True)
+    resolution = models.CharField(max_length=16, blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = (("country", "datetime_utc", "tilt_degrees", "azimuth_degrees"),)
+        indexes = [
+            models.Index(fields=["country", "datetime_utc"]),
+            models.Index(fields=["datetime_utc", "country"]),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.country_id} {self.datetime_utc:%Y-%m-%d %H:%MZ} "
+            f"tilt={self.tilt_degrees} azimuth={self.azimuth_degrees}"
+        )
+
+
 
 
 class ContractType(models.TextChoices):
