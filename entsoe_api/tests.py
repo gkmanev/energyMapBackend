@@ -2,9 +2,11 @@ import datetime as dt
 from unittest.mock import patch
 
 import pandas as pd
-from django.test import SimpleTestCase
+from django.core.cache import cache
+from django.test import SimpleTestCase, TestCase, override_settings
 
 from entsoe_api.entsoe_data import EntsoeGenerationForecastByType
+from entsoe_api.helper import save_country_wind_speed_df
 from entsoe_api.management.commands.fetch_generation_eso_bg import (
     _extract_results,
     _normalize_generation_record,
@@ -14,6 +16,7 @@ from entsoe_api.management.commands.fetch_global_tilted_irradiance import (
     _compute_date_window,
     _iter_date_chunks,
 )
+from entsoe_api.models import Country, CountryWindSpeedPoint
 from entsoe_api.views import _parse_iso_utc_floor_hour, _partition_country_codes
 
 
@@ -135,3 +138,67 @@ class FetchGlobalTiltedIrradianceHelpersTest(SimpleTestCase):
                 [{"code": "ES"}],
             ],
         )
+
+
+class SaveCountryWindSpeedDfTest(TestCase):
+    def test_upserts_country_wind_speed_rows(self):
+        Country.objects.create(iso_code="BG", name="Bulgaria")
+
+        written = save_country_wind_speed_df(pd.DataFrame(
+            {
+                "country": ["BG", "BG"],
+                "datetime_utc": ["2026-03-19T00:00:00Z", "2026-03-19T01:00:00Z"],
+                "wind_speed_120m": [8.7, 9.1],
+                "resolution": ["PT1H", "PT1H"],
+            }
+        ))
+
+        self.assertEqual(written, 2)
+        self.assertEqual(CountryWindSpeedPoint.objects.count(), 2)
+        self.assertEqual(
+            list(CountryWindSpeedPoint.objects.order_by("datetime_utc").values_list("wind_speed_120m", flat=True)),
+            [8.7, 9.1],
+        )
+
+
+@override_settings(COUNTRY_COORDS=[{"code": "BG", "lat": 42.7, "lng": 23.3}])
+class WindSpeedApiTest(TestCase):
+    def setUp(self):
+        cache.clear()
+        Country.objects.create(iso_code="BG", name="Bulgaria")
+        CountryWindSpeedPoint.objects.create(
+            country_id="BG",
+            datetime_utc=dt.datetime(2026, 3, 19, 10, 0, tzinfo=dt.timezone.utc),
+            wind_speed_120m=8.7,
+            resolution="PT1H",
+        )
+
+    def test_single_country_range_returns_wind_speed_points(self):
+        response = self.client.get(
+            "/api/generation-wind-speed/range/",
+            {
+                "country": "BG",
+                "start": "2026-03-19T00:00:00Z",
+                "end": "2026-03-20T00:00:00Z",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["country"], "BG")
+        self.assertEqual(response.json()["items"][0]["wind_speed_120m"], 8.7)
+
+    def test_bulk_range_returns_all_configured_countries(self):
+        response = self.client.get(
+            "/api/generation-wind-speed/bulk-range/",
+            {
+                "countries": "ALL",
+                "start": "2026-03-19T00:00:00Z",
+                "end": "2026-03-20T00:00:00Z",
+            },
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["request_info"]["countries_found"], ["BG"])
+        self.assertEqual(payload["request_info"]["total_records"], 1)
+        self.assertEqual(payload["data"]["BG"]["items"][0]["wind_speed_120m"], 8.7)

@@ -7,6 +7,7 @@ from .models import (
     CountryResGenerationByType,
     CountryGenerationForecastByType,
     CountryTiltedIrradiancePoint,
+    CountryWindSpeedPoint,
     CountryPricePoint,
     PhysicalFlow,
 )
@@ -55,6 +56,19 @@ class CountryTiltedIrradiancePointSerializer(serializers.ModelSerializer):
             "tilt_degrees",
             "azimuth_degrees",
             "irradiance_wm2",
+            "resolution",
+        ]
+
+
+class CountryWindSpeedPointSerializer(serializers.ModelSerializer):
+    country = serializers.SlugRelatedField(slug_field="iso_code", read_only=True)
+
+    class Meta:
+        model = CountryWindSpeedPoint
+        fields = [
+            "country",
+            "datetime_utc",
+            "wind_speed_120m",
             "resolution",
         ]
 

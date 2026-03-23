@@ -154,6 +154,32 @@ class CountryTiltedIrradiancePoint(models.Model):
 
 
 
+class CountryWindSpeedPoint(models.Model):
+    """Open-Meteo hourly 120m wind speed forecast per country."""
+
+    country = models.ForeignKey(
+        Country,
+        on_delete=models.PROTECT,
+        related_name="wind_speed_country",
+    )
+
+    datetime_utc = models.DateTimeField(db_index=True)
+    wind_speed_120m = models.FloatField(null=True, blank=True)
+    resolution = models.CharField(max_length=16, blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = (("country", "datetime_utc"),)
+        indexes = [
+            models.Index(fields=["country", "datetime_utc"]),
+            models.Index(fields=["datetime_utc", "country"]),
+        ]
+
+    def __str__(self):
+        return f"{self.country_id} {self.datetime_utc:%Y-%m-%d %H:%MZ} wind_speed_120m"
+
+
 class ContractType(models.TextChoices):
     A01 = "A01", "Day-ahead"
     A07 = "A07", "Intraday"

@@ -9,6 +9,7 @@ from .models import (
     CountryResGenerationByType,
     CountryGenerationForecastByType,
     CountryTiltedIrradiancePoint,
+    CountryWindSpeedPoint,
     CountryPricePoint,
     PhysicalFlow,
 )
@@ -157,6 +158,41 @@ def save_country_tilted_irradiance_df(df: pd.DataFrame) -> int:
             azimuth_degrees=azimuth_value,
             defaults={
                 "irradiance_wm2": irradiance_value,
+                "resolution": r.get("resolution") or "",
+            },
+        )
+        n += 1
+
+    return n
+
+
+@transaction.atomic
+def save_country_wind_speed_df(df: pd.DataFrame) -> int:
+    """Persist hourly Open-Meteo 120m wind speed rows."""
+
+    if df is None or df.empty:
+        return 0
+
+    required = {"country", "datetime_utc", "wind_speed_120m"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing columns {missing} for CountryWindSpeedPoint")
+
+    df = df.copy()
+    df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True)
+
+    n = 0
+    for r in df.to_dict(orient="records"):
+        c = _get_or_create_country(r["country"])
+        wind_speed_value = r.get("wind_speed_120m")
+        if pd.isna(wind_speed_value):
+            wind_speed_value = None
+
+        CountryWindSpeedPoint.objects.update_or_create(
+            country=c,
+            datetime_utc=_ensure_aware_utc(r["datetime_utc"]),
+            defaults={
+                "wind_speed_120m": wind_speed_value,
                 "resolution": r.get("resolution") or "",
             },
         )
