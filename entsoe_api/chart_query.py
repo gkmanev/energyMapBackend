@@ -18,12 +18,7 @@ INTENT_JSON_SCHEMA = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "country": {
-                "anyOf": [
-                    {"type": "string"},
-                    {"type": "null"},
-                ]
-            },
+            "country": {"type": "string"},
             "countries": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -75,6 +70,7 @@ INTENT_JSON_SCHEMA = {
             },
         },
         "required": [
+            "country",
             "countries",
             "resolution",
             "generation_series",
@@ -198,6 +194,15 @@ def _call_openai_for_intent(message: str) -> dict:
             timeout=timeout_seconds,
         )
         response.raise_for_status()
+    except requests.HTTPError as exc:
+        response_body = ""
+        if exc.response is not None:
+            try:
+                response_body = exc.response.text.strip()
+            except Exception:
+                response_body = ""
+        suffix = f" Response body: {response_body}" if response_body else ""
+        raise ValueError(f"OpenAI request failed: {exc}.{suffix}") from exc
     except requests.RequestException as exc:
         raise ValueError(f"OpenAI request failed: {exc}") from exc
 
