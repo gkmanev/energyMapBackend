@@ -1,6 +1,7 @@
 # entsoe_api/urls.py
 from django.urls import path
 from .views import (
+    ChartQueryView,
     CountryCapacityBulkLatestView,
     CountryCapacityLatestView,
     CountryGenerationBulkRangeView,
@@ -21,6 +22,7 @@ from .views import (
 
 urlpatterns = [
     path("api/", api_root, name="api-root"),
+    path("api/chart-query/", ChartQueryView.as_view(), name="chart-query"),
     path("api/capacity/latest/", CountryCapacityLatestView.as_view(), name="capacity-latest"),
     path("api/capacity/bulk-latest/", CountryCapacityBulkLatestView.as_view(), name="capacity-bulk-latest"),
     path("api/generation/yesterday/", CountryGenerationYesterdayView.as_view(), name="generation-yesterday"),

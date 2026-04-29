@@ -197,6 +197,7 @@ class ApiRootResponseSerializer(serializers.Serializer):
     capacity_latest = serializers.URLField()
     capacity_bulk_latest = serializers.URLField()
     generation_yesterday = serializers.URLField()
+    chart_query = serializers.URLField()
     prices_range = serializers.URLField()
     price_bulk = serializers.URLField()
     generation_range = serializers.URLField()
@@ -212,6 +213,49 @@ class ApiRootResponseSerializer(serializers.Serializer):
     schema = serializers.URLField()
     swagger_ui = serializers.URLField()
     redoc = serializers.URLField()
+
+
+class ChartQueryRequestSerializer(serializers.Serializer):
+    message = serializers.CharField(
+        help_text="Simple text query, for example 'Show the wind and solar generation for BG for the last two weeks daily resolution as well as the prices'."
+    )
+
+
+class ChartQueryPointSerializer(serializers.Serializer):
+    datetime_utc = serializers.DateTimeField()
+    value = serializers.FloatField(allow_null=True)
+
+
+class ChartQuerySeriesSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    name = serializers.CharField()
+    unit = serializers.CharField()
+    data = ChartQueryPointSerializer(many=True)
+
+
+class ChartQueryPanelSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    title = serializers.CharField()
+    type = serializers.CharField()
+    x_key = serializers.CharField()
+    unit = serializers.CharField()
+    series = ChartQuerySeriesSerializer(many=True)
+
+
+class ChartQueryMetadataSerializer(serializers.Serializer):
+    original_message = serializers.CharField()
+    country = serializers.CharField()
+    start_utc = serializers.DateTimeField()
+    end_utc = serializers.DateTimeField()
+    resolution = serializers.CharField(allow_blank=True)
+    time_phrase = serializers.CharField()
+    generation_series = serializers.ListField(child=serializers.CharField())
+    include_prices = serializers.BooleanField()
+
+
+class ChartQueryResponseSerializer(serializers.Serializer):
+    query = ChartQueryMetadataSerializer()
+    panels = ChartQueryPanelSerializer(many=True)
 
 
 class CapacityItemSerializer(serializers.Serializer):

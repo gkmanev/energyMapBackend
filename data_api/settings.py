@@ -220,6 +220,10 @@ CELERY_ENABLE_UTC = True  # keep True; Celery handles conversions
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER", "redis://redis:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_BACKEND", "redis://redis:6379/0")
 
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_CHART_QUERY_MODEL = os.getenv("OPENAI_CHART_QUERY_MODEL", "gpt-4o-mini")
+OPENAI_CHART_QUERY_TIMEOUT = int(os.getenv("OPENAI_CHART_QUERY_TIMEOUT", "30"))
+
 
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators

@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import time
+from collections import defaultdict
 from typing import Iterable, Tuple, Dict, List
 
 from django.conf import settings
@@ -45,6 +46,8 @@ from .api_docs import (
     BAD_REQUEST_RESPONSE,
     CapacityBulkResponseSerializer,
     CapacityLatestResponseSerializer,
+    ChartQueryRequestSerializer,
+    ChartQueryResponseSerializer,
     CONTRACT_PARAMETER,
     countries_parameter,
     country_parameter,
@@ -74,6 +77,7 @@ from .api_docs import (
     WindSpeedBulkResponseSerializer,
     WindSpeedResponseSerializer,
 )
+from .chart_query import ParsedChartQuery, parse_chart_query
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +185,140 @@ def _optional_float_param(request, key: str) -> float | None:
 def _now_utc() -> dt.datetime:
     return dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
 
+
+CHART_GENERATION_SERIES = {
+    "solar": {"label": "Solar", "psr_types": {"B16"}},
+    "wind": {"label": "Wind", "psr_types": {"B18", "B19"}},
+}
+
+CHART_GENERATION_PSR_TO_SERIES = {
+    psr_type: series_key
+    for series_key, meta in CHART_GENERATION_SERIES.items()
+    for psr_type in meta["psr_types"]
+}
+
+
+def _chart_bucket_start(timestamp: dt.datetime, resolution: str) -> dt.datetime:
+    timestamp = _ensure_utc(timestamp)
+    if resolution == "d":
+        return timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
+    if resolution == "m":
+        return timestamp.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if resolution == "y":
+        return timestamp.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    return timestamp
+
+
+def _chart_average(values: List[float]) -> float | None:
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _build_generation_chart_panel(query: ParsedChartQuery) -> dict:
+    rows = (
+        CountryResGenerationByType.objects
+        .filter(
+            country_id=query.country,
+            datetime_utc__gte=query.start_utc,
+            datetime_utc__lt=query.end_utc,
+            psr_type__in=[
+                psr_type
+                for series_key in query.generation_series
+                for psr_type in CHART_GENERATION_SERIES[series_key]["psr_types"]
+            ],
+        )
+        .order_by("datetime_utc", "psr_type")
+        .values("datetime_utc", "psr_type", "generation_mw")
+    )
+
+    timestamp_totals: dict[tuple[str, dt.datetime], float] = defaultdict(float)
+    for row in rows:
+        generation_value = row["generation_mw"]
+        if generation_value is None:
+            continue
+        series_key = CHART_GENERATION_PSR_TO_SERIES.get(row["psr_type"])
+        if not series_key:
+            continue
+        timestamp = _ensure_utc(row["datetime_utc"])
+        timestamp_totals[(series_key, timestamp)] += float(generation_value)
+
+    grouped_values: dict[tuple[str, dt.datetime], List[float]] = defaultdict(list)
+    for (series_key, timestamp), total_value in timestamp_totals.items():
+        bucket = _chart_bucket_start(timestamp, query.resolution)
+        grouped_values[(series_key, bucket)].append(total_value)
+
+    series_points: dict[str, List[dict]] = {series_key: [] for series_key in query.generation_series}
+    series_order = {series_key: index for index, series_key in enumerate(query.generation_series)}
+    for (series_key, bucket), values in sorted(grouped_values.items(), key=lambda item: (series_order[item[0][0]], item[0][1])):
+        series_points[series_key].append({
+            "datetime_utc": _fmt_z(bucket),
+            "value": _chart_average(values),
+        })
+
+    return {
+        "id": "generation",
+        "title": f"{query.country} renewable generation",
+        "type": "line",
+        "x_key": "datetime_utc",
+        "unit": "MW",
+        "series": [
+            {
+                "id": series_key,
+                "name": CHART_GENERATION_SERIES[series_key]["label"],
+                "unit": "MW",
+                "data": series_points[series_key],
+            }
+            for series_key in query.generation_series
+        ],
+    }
+
+
+def _build_price_chart_panel(query: ParsedChartQuery) -> dict:
+    rows = (
+        CountryPricePoint.objects
+        .filter(
+            country_id=query.country,
+            contract_type="A01",
+            datetime_utc__gte=query.start_utc,
+            datetime_utc__lt=query.end_utc,
+        )
+        .order_by("datetime_utc")
+        .values("datetime_utc", "price")
+    )
+
+    grouped_values: dict[dt.datetime, List[float]] = defaultdict(list)
+    for row in rows:
+        price = row["price"]
+        if price is None:
+            continue
+        bucket = _chart_bucket_start(row["datetime_utc"], query.resolution)
+        grouped_values[bucket].append(float(price))
+
+    data = [
+        {
+            "datetime_utc": _fmt_z(bucket),
+            "value": _chart_average(values),
+        }
+        for bucket, values in sorted(grouped_values.items())
+    ]
+
+    return {
+        "id": "prices",
+        "title": f"{query.country} day-ahead prices",
+        "type": "line",
+        "x_key": "datetime_utc",
+        "unit": "EUR/MWh",
+        "series": [
+            {
+                "id": "price",
+                "name": "Day-ahead price",
+                "unit": "EUR/MWh",
+                "data": data,
+            }
+        ],
+    }
+
 def _compute_window_utc(
     period: str | None,
     start_s: str | None,
@@ -274,6 +412,7 @@ def _flow_field_names() -> Tuple[str, str, str]:
                 "capacity_latest": "https://api.example.com/api/capacity/latest/",
                 "capacity_bulk_latest": "https://api.example.com/api/capacity/bulk-latest/",
                 "generation_yesterday": "https://api.example.com/api/generation/yesterday/",
+                "chart_query": "https://api.example.com/api/chart-query/",
                 "prices_range": "https://api.example.com/api/prices/range/",
                 "price_bulk": "https://api.example.com/api/prices/bulk-range/",
                 "generation_range": "https://api.example.com/api/generation/range/",
@@ -299,6 +438,7 @@ def api_root(request, format=None):
         "capacity_latest": request.build_absolute_uri(reverse("capacity-latest")),
         "capacity_bulk_latest": request.build_absolute_uri(reverse("capacity-bulk-latest")),
         "generation_yesterday": request.build_absolute_uri(reverse("generation-yesterday")),
+        "chart_query": request.build_absolute_uri(reverse("chart-query")),
         "prices_range": request.build_absolute_uri(reverse("prices-range")),
         "price_bulk": request.build_absolute_uri(reverse("country-prices-bulk-range")),
         "generation_range": request.build_absolute_uri(reverse("generation-range")),
@@ -315,6 +455,123 @@ def api_root(request, format=None):
         "swagger_ui": request.build_absolute_uri(reverse("swagger-ui")),
         "redoc": request.build_absolute_uri(reverse("redoc")),
     })
+
+
+class ChartQueryView(APIView):
+    @extend_schema(
+        tags=["Meta"],
+        summary="Parse a simple chart query",
+        description=(
+            "Accepts a constrained natural-language request, maps it to known metrics, "
+            "queries the database, and returns chart-ready JSON panels. "
+            "The first version supports solar generation, wind generation, and day-ahead prices."
+        ),
+        request=ChartQueryRequestSerializer,
+        responses={
+            200: ChartQueryResponseSerializer,
+            400: BAD_REQUEST_RESPONSE,
+        },
+        examples=[
+            OpenApiExample(
+                "Chart query request",
+                value={
+                    "message": "Show the wind and solar generation for BG for the last two weeks daily resolution as well as the prices",
+                },
+                request_only=True,
+            ),
+            OpenApiExample(
+                "Chart query response",
+                response_only=True,
+                value={
+                    "query": {
+                        "original_message": "Show the wind and solar generation for BG for the last two weeks daily resolution as well as the prices",
+                        "country": "BG",
+                        "start_utc": "2026-04-15T00:00:00Z",
+                        "end_utc": "2026-04-29T00:00:00Z",
+                        "resolution": "d",
+                        "time_phrase": "last 2 weeks at daily resolution",
+                        "generation_series": ["wind", "solar"],
+                        "include_prices": True,
+                    },
+                    "panels": [
+                        {
+                            "id": "generation",
+                            "title": "BG renewable generation",
+                            "type": "line",
+                            "x_key": "datetime_utc",
+                            "unit": "MW",
+                            "series": [
+                                {
+                                    "id": "wind",
+                                    "name": "Wind",
+                                    "unit": "MW",
+                                    "data": [{"datetime_utc": "2026-04-15T00:00:00Z", "value": 230.5}],
+                                },
+                                {
+                                    "id": "solar",
+                                    "name": "Solar",
+                                    "unit": "MW",
+                                    "data": [{"datetime_utc": "2026-04-15T00:00:00Z", "value": 410.2}],
+                                },
+                            ],
+                        },
+                        {
+                            "id": "prices",
+                            "title": "BG day-ahead prices",
+                            "type": "line",
+                            "x_key": "datetime_utc",
+                            "unit": "EUR/MWh",
+                            "series": [
+                                {
+                                    "id": "price",
+                                    "name": "Day-ahead price",
+                                    "unit": "EUR/MWh",
+                                    "data": [{"datetime_utc": "2026-04-15T00:00:00Z", "value": 82.4}],
+                                }
+                            ],
+                        },
+                    ],
+                },
+            ),
+        ],
+    )
+    def post(self, request):
+        serializer = ChartQueryRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=False)
+        if serializer.errors:
+            return Response(serializer.errors, status=400)
+
+        try:
+            query = parse_chart_query(
+                serializer.validated_data["message"],
+                now_utc=_now_utc(),
+            )
+            _get_country_or_400(query.country)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=400)
+
+        panels: list[dict] = []
+        if query.generation_series:
+            panels.append(_build_generation_chart_panel(query))
+        if query.include_prices:
+            panels.append(_build_price_chart_panel(query))
+
+        return Response(
+            {
+                "query": {
+                    "original_message": query.original_message,
+                    "country": query.country,
+                    "start_utc": _fmt_z(query.start_utc),
+                    "end_utc": _fmt_z(query.end_utc),
+                    "resolution": query.resolution,
+                    "time_phrase": query.time_phrase,
+                    "generation_series": query.generation_series,
+                    "include_prices": query.include_prices,
+                },
+                "panels": panels,
+            },
+            status=200,
+        )
 
 
 # ─────────────────────────── Capacity (latest year) ────────────────────────────
