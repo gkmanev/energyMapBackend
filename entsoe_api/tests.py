@@ -96,6 +96,7 @@ class ChartQueryParserTest(SimpleTestCase):
                 "output_text": json.dumps(
                     {
                         "country": "BG",
+                        "countries": ["BG"],
                         "resolution": "d",
                         "generation_series": ["wind", "solar"],
                         "include_prices": True,
@@ -116,12 +117,50 @@ class ChartQueryParserTest(SimpleTestCase):
         )
 
         self.assertEqual(parsed.country, "BG")
+        self.assertEqual(parsed.countries, ["BG"])
         self.assertEqual(parsed.resolution, "d")
         self.assertEqual(parsed.generation_series, ["wind", "solar"])
         self.assertTrue(parsed.include_prices)
         self.assertEqual(parsed.start_utc, dt.datetime(2026, 4, 15, 0, 0, tzinfo=dt.timezone.utc))
         self.assertEqual(parsed.end_utc, dt.datetime(2026, 4, 29, 0, 0, tzinfo=dt.timezone.utc))
         self.assertEqual(mock_post.call_args.kwargs["json"]["model"], "gpt-4o-mini")
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
+    @patch("entsoe_api.chart_query.requests.post")
+    def test_parses_multi_country_price_comparison_query(self, mock_post):
+        mock_post.return_value = MockOpenAIResponse(
+            {
+                "status": "completed",
+                "output_text": json.dumps(
+                    {
+                        "country": "BG",
+                        "countries": ["BG", "RO"],
+                        "resolution": "d",
+                        "generation_series": [],
+                        "include_prices": True,
+                        "timeframe": {
+                            "kind": "last_n_weeks",
+                            "amount": 4,
+                            "start_utc": None,
+                            "end_utc": None,
+                        },
+                    }
+                ),
+            }
+        )
+
+        parsed = parse_chart_query(
+            "Compare the prices for BG and RO for the last month. Daily resolution",
+            now_utc=dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc),
+        )
+
+        self.assertEqual(parsed.country, "BG")
+        self.assertEqual(parsed.countries, ["BG", "RO"])
+        self.assertEqual(parsed.resolution, "d")
+        self.assertEqual(parsed.generation_series, [])
+        self.assertTrue(parsed.include_prices)
+        self.assertEqual(parsed.start_utc, dt.datetime(2026, 4, 1, 0, 0, tzinfo=dt.timezone.utc))
+        self.assertEqual(parsed.end_utc, dt.datetime(2026, 4, 29, 0, 0, tzinfo=dt.timezone.utc))
 
 
 class FetchGenerationEsoBgHelpersTest(SimpleTestCase):
@@ -259,6 +298,7 @@ class ChartQueryApiTest(TestCase):
     def setUp(self):
         cache.clear()
         Country.objects.create(iso_code="BG", name="Bulgaria")
+        Country.objects.create(iso_code="RO", name="Romania")
 
         for timestamp, solar, wind_offshore, wind_onshore, price in [
             (dt.datetime(2026, 4, 15, 0, 0, tzinfo=dt.timezone.utc), 10.0, 3.0, 7.0, 60.0),
@@ -302,6 +342,21 @@ class ChartQueryApiTest(TestCase):
                 resolution="PT60M",
             )
 
+        for timestamp, price in [
+            (dt.datetime(2026, 4, 15, 0, 0, tzinfo=dt.timezone.utc), 40.0),
+            (dt.datetime(2026, 4, 15, 1, 0, tzinfo=dt.timezone.utc), 60.0),
+            (dt.datetime(2026, 4, 16, 0, 0, tzinfo=dt.timezone.utc), 110.0),
+        ]:
+            CountryPricePoint.objects.create(
+                country_id="RO",
+                datetime_utc=timestamp,
+                contract_type="A01",
+                price=price,
+                currency="EUR",
+                unit="MWH",
+                resolution="PT60M",
+            )
+
     @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
     @patch("entsoe_api.chart_query.requests.post")
     @patch("entsoe_api.views._now_utc")
@@ -313,6 +368,7 @@ class ChartQueryApiTest(TestCase):
                 "output_text": json.dumps(
                     {
                         "country": "BG",
+                        "countries": ["BG"],
                         "resolution": "d",
                         "generation_series": ["wind", "solar"],
                         "include_prices": True,
@@ -338,6 +394,7 @@ class ChartQueryApiTest(TestCase):
         payload = response.json()
         self.assertEqual(response.status_code, 200)
         self.assertEqual(payload["query"]["country"], "BG")
+        self.assertEqual(payload["query"]["countries"], ["BG"])
         self.assertEqual(payload["query"]["start_utc"], "2026-04-15T00:00:00Z")
         self.assertEqual(payload["query"]["end_utc"], "2026-04-29T00:00:00Z")
         self.assertEqual(payload["query"]["generation_series"], ["wind", "solar"])
@@ -352,3 +409,49 @@ class ChartQueryApiTest(TestCase):
         prices_panel = payload["panels"][1]
         self.assertEqual(prices_panel["id"], "prices")
         self.assertEqual(prices_panel["series"][0]["data"][0]["value"], 70.0)
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
+    @patch("entsoe_api.chart_query.requests.post")
+    @patch("entsoe_api.views._now_utc")
+    def test_chart_query_returns_multi_country_price_panel(self, mock_now_utc, mock_post):
+        mock_now_utc.return_value = dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc)
+        mock_post.return_value = MockOpenAIResponse(
+            {
+                "status": "completed",
+                "output_text": json.dumps(
+                    {
+                        "country": "BG",
+                        "countries": ["BG", "RO"],
+                        "resolution": "d",
+                        "generation_series": [],
+                        "include_prices": True,
+                        "timeframe": {
+                            "kind": "last_n_weeks",
+                            "amount": 4,
+                            "start_utc": None,
+                            "end_utc": None,
+                        },
+                    }
+                ),
+            }
+        )
+
+        response = self.client.post(
+            "/api/chart-query/",
+            data=json.dumps({
+                "message": "Compare the prices for BG and RO for the last month. Daily resolution",
+            }),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["query"]["country"], "BG")
+        self.assertEqual(payload["query"]["countries"], ["BG", "RO"])
+
+        prices_panel = payload["panels"][0]
+        self.assertEqual(prices_panel["id"], "prices")
+        self.assertEqual(prices_panel["title"], "BG vs RO day-ahead prices")
+        self.assertEqual([series["id"] for series in prices_panel["series"]], ["bg", "ro"])
+        self.assertEqual(prices_panel["series"][0]["data"][0]["value"], 70.0)
+        self.assertEqual(prices_panel["series"][1]["data"][0]["value"], 50.0)

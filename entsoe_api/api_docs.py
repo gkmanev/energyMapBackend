@@ -245,6 +245,7 @@ class ChartQueryPanelSerializer(serializers.Serializer):
 class ChartQueryMetadataSerializer(serializers.Serializer):
     original_message = serializers.CharField()
     country = serializers.CharField()
+    countries = serializers.ListField(child=serializers.CharField())
     start_utc = serializers.DateTimeField()
     end_utc = serializers.DateTimeField()
     resolution = serializers.CharField(allow_blank=True)

@@ -219,7 +219,7 @@ def _build_generation_chart_panel(query: ParsedChartQuery) -> dict:
     rows = (
         CountryResGenerationByType.objects
         .filter(
-            country_id=query.country,
+            country_id__in=query.countries,
             datetime_utc__gte=query.start_utc,
             datetime_utc__lt=query.end_utc,
             psr_type__in=[
@@ -229,10 +229,10 @@ def _build_generation_chart_panel(query: ParsedChartQuery) -> dict:
             ],
         )
         .order_by("datetime_utc", "psr_type")
-        .values("datetime_utc", "psr_type", "generation_mw")
+        .values("country_id", "datetime_utc", "psr_type", "generation_mw")
     )
 
-    timestamp_totals: dict[tuple[str, dt.datetime], float] = defaultdict(float)
+    timestamp_totals: dict[tuple[str, str, dt.datetime], float] = defaultdict(float)
     for row in rows:
         generation_value = row["generation_mw"]
         if generation_value is None:
@@ -241,34 +241,69 @@ def _build_generation_chart_panel(query: ParsedChartQuery) -> dict:
         if not series_key:
             continue
         timestamp = _ensure_utc(row["datetime_utc"])
-        timestamp_totals[(series_key, timestamp)] += float(generation_value)
+        timestamp_totals[(row["country_id"], series_key, timestamp)] += float(generation_value)
 
-    grouped_values: dict[tuple[str, dt.datetime], List[float]] = defaultdict(list)
-    for (series_key, timestamp), total_value in timestamp_totals.items():
+    grouped_values: dict[tuple[str, str, dt.datetime], List[float]] = defaultdict(list)
+    for (country_code, series_key, timestamp), total_value in timestamp_totals.items():
         bucket = _chart_bucket_start(timestamp, query.resolution)
-        grouped_values[(series_key, bucket)].append(total_value)
+        grouped_values[(country_code, series_key, bucket)].append(total_value)
 
-    series_points: dict[str, List[dict]] = {series_key: [] for series_key in query.generation_series}
+    if len(query.countries) == 1:
+        series_points: dict[str, List[dict]] = {series_key: [] for series_key in query.generation_series}
+        series_order = {series_key: index for index, series_key in enumerate(query.generation_series)}
+        for (_, series_key, bucket), values in sorted(grouped_values.items(), key=lambda item: (series_order[item[0][1]], item[0][2])):
+            series_points[series_key].append({
+                "datetime_utc": _fmt_z(bucket),
+                "value": _chart_average(values),
+            })
+
+        return {
+            "id": "generation",
+            "title": f"{query.country} renewable generation",
+            "type": "line",
+            "x_key": "datetime_utc",
+            "unit": "MW",
+            "series": [
+                {
+                    "id": series_key,
+                    "name": CHART_GENERATION_SERIES[series_key]["label"],
+                    "unit": "MW",
+                    "data": series_points[series_key],
+                }
+                for series_key in query.generation_series
+            ],
+        }
+
+    series_points_multi: dict[tuple[str, str], List[dict]] = {
+        (country_code, series_key): []
+        for country_code in query.countries
+        for series_key in query.generation_series
+    }
+    country_order = {country_code: index for index, country_code in enumerate(query.countries)}
     series_order = {series_key: index for index, series_key in enumerate(query.generation_series)}
-    for (series_key, bucket), values in sorted(grouped_values.items(), key=lambda item: (series_order[item[0][0]], item[0][1])):
-        series_points[series_key].append({
+    for (country_code, series_key, bucket), values in sorted(
+        grouped_values.items(),
+        key=lambda item: (country_order[item[0][0]], series_order[item[0][1]], item[0][2]),
+    ):
+        series_points_multi[(country_code, series_key)].append({
             "datetime_utc": _fmt_z(bucket),
             "value": _chart_average(values),
         })
 
     return {
         "id": "generation",
-        "title": f"{query.country} renewable generation",
+        "title": f"{' vs '.join(query.countries)} renewable generation",
         "type": "line",
         "x_key": "datetime_utc",
         "unit": "MW",
         "series": [
             {
-                "id": series_key,
-                "name": CHART_GENERATION_SERIES[series_key]["label"],
+                "id": f"{country_code.lower()}_{series_key}",
+                "name": f"{country_code} {CHART_GENERATION_SERIES[series_key]['label']}",
                 "unit": "MW",
-                "data": series_points[series_key],
+                "data": series_points_multi[(country_code, series_key)],
             }
+            for country_code in query.countries
             for series_key in query.generation_series
         ],
     }
@@ -278,44 +313,70 @@ def _build_price_chart_panel(query: ParsedChartQuery) -> dict:
     rows = (
         CountryPricePoint.objects
         .filter(
-            country_id=query.country,
+            country_id__in=query.countries,
             contract_type="A01",
             datetime_utc__gte=query.start_utc,
             datetime_utc__lt=query.end_utc,
         )
         .order_by("datetime_utc")
-        .values("datetime_utc", "price")
+        .values("country_id", "datetime_utc", "price")
     )
 
-    grouped_values: dict[dt.datetime, List[float]] = defaultdict(list)
+    grouped_values: dict[tuple[str, dt.datetime], List[float]] = defaultdict(list)
     for row in rows:
         price = row["price"]
         if price is None:
             continue
         bucket = _chart_bucket_start(row["datetime_utc"], query.resolution)
-        grouped_values[bucket].append(float(price))
+        grouped_values[(row["country_id"], bucket)].append(float(price))
 
-    data = [
-        {
+    if len(query.countries) == 1:
+        data = [
+            {
+                "datetime_utc": _fmt_z(bucket),
+                "value": _chart_average(values),
+            }
+            for (_, bucket), values in sorted(grouped_values.items(), key=lambda item: item[0][1])
+        ]
+
+        return {
+            "id": "prices",
+            "title": f"{query.country} day-ahead prices",
+            "type": "line",
+            "x_key": "datetime_utc",
+            "unit": "EUR/MWh",
+            "series": [
+                {
+                    "id": "price",
+                    "name": "Day-ahead price",
+                    "unit": "EUR/MWh",
+                    "data": data,
+                }
+            ],
+        }
+
+    series_points: dict[str, List[dict]] = {country_code: [] for country_code in query.countries}
+    country_order = {country_code: index for index, country_code in enumerate(query.countries)}
+    for (country_code, bucket), values in sorted(grouped_values.items(), key=lambda item: (country_order[item[0][0]], item[0][1])):
+        series_points[country_code].append({
             "datetime_utc": _fmt_z(bucket),
             "value": _chart_average(values),
-        }
-        for bucket, values in sorted(grouped_values.items())
-    ]
+        })
 
     return {
         "id": "prices",
-        "title": f"{query.country} day-ahead prices",
+        "title": f"{' vs '.join(query.countries)} day-ahead prices",
         "type": "line",
         "x_key": "datetime_utc",
         "unit": "EUR/MWh",
         "series": [
             {
-                "id": "price",
-                "name": "Day-ahead price",
+                "id": country_code.lower(),
+                "name": country_code,
                 "unit": "EUR/MWh",
-                "data": data,
+                "data": series_points[country_code],
             }
+            for country_code in query.countries
         ],
     }
 
@@ -486,6 +547,7 @@ class ChartQueryView(APIView):
                     "query": {
                         "original_message": "Show the wind and solar generation for BG for the last two weeks daily resolution as well as the prices",
                         "country": "BG",
+                        "countries": ["BG"],
                         "start_utc": "2026-04-15T00:00:00Z",
                         "end_utc": "2026-04-29T00:00:00Z",
                         "resolution": "d",
@@ -546,7 +608,7 @@ class ChartQueryView(APIView):
                 serializer.validated_data["message"],
                 now_utc=_now_utc(),
             )
-            _get_country_or_400(query.country)
+            _validate_countries_or_400(query.countries)
         except ValueError as e:
             return Response({"detail": str(e)}, status=400)
 
@@ -561,6 +623,7 @@ class ChartQueryView(APIView):
                 "query": {
                     "original_message": query.original_message,
                     "country": query.country,
+                    "countries": query.countries,
                     "start_utc": _fmt_z(query.start_utc),
                     "end_utc": _fmt_z(query.end_utc),
                     "resolution": query.resolution,

@@ -18,7 +18,17 @@ INTENT_JSON_SCHEMA = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "country": {"type": "string"},
+            "country": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "null"},
+                ]
+            },
+            "countries": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+            },
             "resolution": {
                 "type": "string",
                 "enum": ["native", "d", "m", "y"],
@@ -65,7 +75,7 @@ INTENT_JSON_SCHEMA = {
             },
         },
         "required": [
-            "country",
+            "countries",
             "resolution",
             "generation_series",
             "include_prices",
@@ -80,7 +90,9 @@ Rules:
 - Return only data matching the provided JSON schema.
 - Supported generation series are only: solar, wind.
 - Supported non-generation metric is prices, mapped to include_prices=true.
-- Country must be a 2-letter ISO code when present.
+- Countries must be 2-letter ISO codes.
+- Always fill countries as an array in the same order as the request.
+- If country is included, set it to the first requested country for compatibility.
 - Resolution must be one of:
   - native: no aggregation requested
   - d: daily
@@ -97,6 +109,7 @@ Rules:
 class ParsedChartQuery:
     original_message: str
     country: str
+    countries: list[str]
     start_utc: dt.datetime
     end_utc: dt.datetime
     resolution: str
@@ -230,9 +243,25 @@ def parse_chart_query(message: str, *, now_utc: dt.datetime) -> ParsedChartQuery
 
     intent = _call_openai_for_intent(normalized_message)
 
-    country = str(intent.get("country", "")).strip().upper()
-    if len(country) != 2 or not country.isalpha():
-        raise ValueError("The model did not return a valid 2-letter country code.")
+    raw_countries = intent.get("countries")
+    countries: list[str] = []
+    if isinstance(raw_countries, list):
+        countries = _ordered_unique(
+            [
+                str(item).strip().upper()
+                for item in raw_countries
+                if str(item).strip()
+            ]
+        )
+
+    compatibility_country = str(intent.get("country", "")).strip().upper()
+    if not countries and compatibility_country:
+        countries = [compatibility_country]
+
+    if not countries or any(len(country_code) != 2 or not country_code.isalpha() for country_code in countries):
+        raise ValueError("The model did not return valid 2-letter country codes.")
+
+    country = compatibility_country if compatibility_country in countries else countries[0]
 
     resolution = intent.get("resolution", "native")
     if resolution == "native":
@@ -266,6 +295,7 @@ def parse_chart_query(message: str, *, now_utc: dt.datetime) -> ParsedChartQuery
     return ParsedChartQuery(
         original_message=normalized_message,
         country=country,
+        countries=countries,
         start_utc=start_utc,
         end_utc=end_utc,
         resolution=resolution,
