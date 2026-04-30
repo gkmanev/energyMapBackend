@@ -374,6 +374,44 @@ class ChartQueryParserTest(SimpleTestCase):
                 now_utc=dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc),
             )
 
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
+    @patch("entsoe_api.chart_query.requests.post")
+    def test_explicit_message_details_override_stale_model_output(self, mock_post):
+        mock_post.return_value = MockOpenAIResponse(
+            {
+                "status": "completed",
+                "output_text": json.dumps(
+                    {
+                        "country": "BG",
+                        "countries": ["BG"],
+                        "resolution": "d",
+                        "generation_series": ["wind", "solar"],
+                        "include_prices": True,
+                        "timeframe": {
+                            "kind": "last_n_weeks",
+                            "amount": 2,
+                            "start_utc": None,
+                            "end_utc": None,
+                        },
+                    }
+                ),
+            }
+        )
+
+        parsed = parse_chart_query(
+            "Compare res generation for BG and RO for April. Daily resolution",
+            now_utc=dt.datetime(2026, 4, 30, 13, 0, tzinfo=dt.timezone.utc),
+        )
+
+        self.assertEqual(parsed.country, "BG")
+        self.assertEqual(parsed.countries, ["BG", "RO"])
+        self.assertEqual(parsed.resolution, "d")
+        self.assertEqual(parsed.generation_series, ["res"])
+        self.assertFalse(parsed.include_prices)
+        self.assertEqual(parsed.start_utc, dt.datetime(2026, 4, 1, 0, 0, tzinfo=dt.timezone.utc))
+        self.assertEqual(parsed.end_utc, dt.datetime(2026, 4, 30, 0, 0, tzinfo=dt.timezone.utc))
+        self.assertEqual(parsed.time_phrase, "April at daily resolution")
+
 
 class FetchGenerationEsoBgHelpersTest(SimpleTestCase):
     def test_extract_results_accepts_paginated_payload(self):
@@ -794,3 +832,47 @@ class ChartQueryApiTest(TestCase):
         self.assertEqual(payload["query"]["generation_series"], ["res"])
         self.assertEqual(payload["panels"][0]["type"], "bar")
         self.assertIn("bar chart", payload["assistant_message"])
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
+    @patch("entsoe_api.chart_query.requests.post")
+    @patch("entsoe_api.views._now_utc")
+    def test_chart_query_uses_explicit_message_details_when_model_output_is_stale(self, mock_now_utc, mock_post):
+        mock_now_utc.return_value = dt.datetime(2026, 4, 30, 13, 0, tzinfo=dt.timezone.utc)
+        mock_post.return_value = MockOpenAIResponse(
+            {
+                "status": "completed",
+                "output_text": json.dumps(
+                    {
+                        "country": "BG",
+                        "countries": ["BG"],
+                        "resolution": "d",
+                        "generation_series": ["wind", "solar"],
+                        "include_prices": True,
+                        "timeframe": {
+                            "kind": "last_n_weeks",
+                            "amount": 2,
+                            "start_utc": None,
+                            "end_utc": None,
+                        },
+                    }
+                ),
+            }
+        )
+
+        response = self.client.post(
+            "/api/chart-query/",
+            data=json.dumps({
+                "message": "Compare res generation for BG and RO for April. Daily resolution",
+            }),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["query"]["countries"], ["BG", "RO"])
+        self.assertEqual(payload["query"]["generation_series"], ["res"])
+        self.assertFalse(payload["query"]["include_prices"])
+        self.assertEqual(payload["query"]["start_utc"], "2026-04-01T00:00:00Z")
+        self.assertEqual(payload["query"]["end_utc"], "2026-04-30T00:00:00Z")
+        self.assertEqual(payload["panels"][0]["title"], "BG vs RO renewable generation")
+        self.assertEqual([series["id"] for series in payload["panels"][0]["series"]], ["bg_res", "ro_res"])

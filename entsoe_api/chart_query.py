@@ -202,6 +202,131 @@ def _looks_like_visualization_follow_up(message: str) -> bool:
     )
 
 
+def _configured_country_codes() -> set[str]:
+    codes: set[str] = set()
+    for setting_name in ("ENTSOE_COUNTRY_TO_EICS", "ENTSOE_PRICE_COUNTRY_TO_EICS"):
+        raw_mapping = getattr(settings, setting_name, None) or {}
+        if isinstance(raw_mapping, dict):
+            codes.update(
+                str(code).strip().upper()
+                for code in raw_mapping.keys()
+                if len(str(code).strip()) == 2
+            )
+
+    raw_coords = getattr(settings, "COUNTRY_COORDS", None) or []
+    if isinstance(raw_coords, list):
+        codes.update(
+            str(item.get("code", "")).strip().upper()
+            for item in raw_coords
+            if isinstance(item, dict) and len(str(item.get("code", "")).strip()) == 2
+        )
+
+    return {code for code in codes if code.isalpha()}
+
+
+def _extract_countries_from_message(message: str) -> list[str]:
+    configured_codes = _configured_country_codes()
+    countries: list[str] = []
+    for match in re.finditer(r"\b[A-Z]{2}\b", message):
+        code = match.group(0).upper()
+        if configured_codes and code not in configured_codes:
+            continue
+        countries.append(code)
+    return _ordered_unique(countries)
+
+
+def _extract_resolution_from_message(message: str) -> str | None:
+    lowered = message.lower()
+    if re.search(r"\b(daily|day-by-day)\b", lowered):
+        return "d"
+    if re.search(r"\b(monthly)\b", lowered):
+        return "m"
+    if re.search(r"\b(yearly|annual)\b", lowered):
+        return "y"
+    if re.search(r"\b(native|raw|hourly|hour|hours)\b", lowered):
+        return ""
+    return None
+
+
+def _extract_metrics_from_message(message: str) -> tuple[list[str], bool] | None:
+    lowered = message.lower()
+    include_prices = bool(re.search(r"\bprice(?:s)?\b", lowered))
+    series_matches: list[tuple[int, str]] = []
+    for series_key, pattern in (("wind", r"\bwind\b"), ("solar", r"\bsolar\b")):
+        match = re.search(pattern, lowered)
+        if match:
+            series_matches.append((match.start(), series_key))
+
+    generation_series = [series_key for _, series_key in sorted(series_matches)]
+    if not generation_series and _message_implies_res_generation(message):
+        generation_series = ["res"]
+
+    if generation_series or include_prices:
+        return generation_series, include_prices
+    return None
+
+
+def _extract_calendar_month_window(
+    message: str,
+    now_utc: dt.datetime,
+) -> tuple[dt.datetime, dt.datetime, str] | None:
+    month_match = re.search(
+        r"\b("
+        r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+        r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|"
+        r"nov(?:ember)?|dec(?:ember)?"
+        r")\b(?:\s+(\d{4}))?",
+        message.lower(),
+    )
+    if month_match is None:
+        return None
+
+    month_token = month_match.group(1).lower()
+    month_number = {
+        "jan": 1,
+        "january": 1,
+        "feb": 2,
+        "february": 2,
+        "mar": 3,
+        "march": 3,
+        "apr": 4,
+        "april": 4,
+        "may": 5,
+        "jun": 6,
+        "june": 6,
+        "jul": 7,
+        "july": 7,
+        "aug": 8,
+        "august": 8,
+        "sep": 9,
+        "sept": 9,
+        "september": 9,
+        "oct": 10,
+        "october": 10,
+        "nov": 11,
+        "november": 11,
+        "dec": 12,
+        "december": 12,
+    }[month_token]
+
+    today_utc = _ensure_utc(now_utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    year = int(month_match.group(2)) if month_match.group(2) else today_utc.year
+    start_utc = dt.datetime(year, month_number, 1, tzinfo=dt.timezone.utc)
+    if month_number == 12:
+        next_month_start = dt.datetime(year + 1, 1, 1, tzinfo=dt.timezone.utc)
+    else:
+        next_month_start = dt.datetime(year, month_number + 1, 1, tzinfo=dt.timezone.utc)
+
+    end_utc = min(next_month_start, today_utc) if year == today_utc.year and month_number == today_utc.month else next_month_start
+    if start_utc >= end_utc:
+        return None
+
+    month_label = start_utc.strftime("%B")
+    if month_match.group(2):
+        month_label = f"{month_label} {year}"
+    return start_utc, end_utc, month_label
+
+
 def _infer_default_resolution(
     requested_resolution: str,
     message: str,
@@ -449,6 +574,21 @@ def parse_chart_query(message: str, *, now_utc: dt.datetime, previous_query: dic
     intent = _call_openai_for_intent(normalized_message, previous_query=previous_query)
     intent = _merge_with_previous_query(intent, normalized_message, normalized_previous)
 
+    explicit_countries = _extract_countries_from_message(normalized_message)
+    if explicit_countries:
+        intent["countries"] = explicit_countries
+        intent["country"] = explicit_countries[0]
+
+    explicit_resolution = _extract_resolution_from_message(normalized_message)
+    if explicit_resolution is not None:
+        intent["resolution"] = explicit_resolution or "native"
+
+    explicit_metrics = _extract_metrics_from_message(normalized_message)
+    if explicit_metrics is not None:
+        generation_series_override, include_prices_override = explicit_metrics
+        intent["generation_series"] = generation_series_override
+        intent["include_prices"] = include_prices_override
+
     raw_countries = intent.get("countries")
     countries: list[str] = []
     if isinstance(raw_countries, list):
@@ -501,10 +641,13 @@ def parse_chart_query(message: str, *, now_utc: dt.datetime, previous_query: dic
         chart_type = _extract_chart_type(normalized_message) or "line"
 
     timeframe = intent.get("timeframe")
-    if not isinstance(timeframe, dict):
-        raise ValueError("The model did not return a valid timeframe object.")
-
-    start_utc, end_utc, time_phrase = _compute_window_from_intent(timeframe, now_utc)
+    explicit_month_window = _extract_calendar_month_window(normalized_message, now_utc)
+    if explicit_month_window is not None:
+        start_utc, end_utc, time_phrase = explicit_month_window
+    else:
+        if not isinstance(timeframe, dict):
+            raise ValueError("The model did not return a valid timeframe object.")
+        start_utc, end_utc, time_phrase = _compute_window_from_intent(timeframe, now_utc)
     if start_utc >= end_utc:
         raise ValueError("The parsed start time must be earlier than end time.")
 
