@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 from dataclasses import dataclass, field
 
 import requests
@@ -30,7 +31,7 @@ INTENT_JSON_SCHEMA = {
             },
             "generation_series": {
                 "type": "array",
-                "items": {"type": "string", "enum": ["solar", "wind"]},
+                "items": {"type": "string", "enum": ["res", "solar", "wind"]},
             },
             "include_prices": {"type": "boolean"},
             "timeframe": {
@@ -84,7 +85,9 @@ SYSTEM_PROMPT = """You convert user chart requests into a strict JSON intent.
 
 Rules:
 - Return only data matching the provided JSON schema.
-- Supported generation series are only: solar, wind.
+- Supported generation series are only: res, solar, wind.
+- Map requests for "RES", "renewables", or "renewable generation" to res unless the user explicitly asks for specific types.
+- In this API, res means the available A69 renewable set: solar + wind.
 - Supported non-generation metric is prices, mapped to include_prices=true.
 - Countries must be 2-letter ISO codes.
 - Always fill countries as an array in the same order as the request.
@@ -141,6 +144,11 @@ def _ordered_unique(items: list[str]) -> list[str]:
             ordered.append(item)
             seen.add(item)
     return ordered
+
+
+def _message_implies_res_generation(message: str) -> bool:
+    lowered = message.lower()
+    return bool(re.search(r"\bres\b|\brenewable(?:s)?\b", lowered))
 
 
 def _extract_output_text(response_json: dict) -> str:
@@ -274,11 +282,19 @@ def parse_chart_query(message: str, *, now_utc: dt.datetime) -> ParsedChartQuery
     if resolution not in {"", "d", "m", "y"}:
         raise ValueError("The model returned an unsupported resolution.")
 
-    generation_series = _ordered_unique(list(intent.get("generation_series", [])))
-    if any(item not in {"solar", "wind"} for item in generation_series):
+    generation_series = _ordered_unique(
+        [
+            str(item).strip().lower()
+            for item in intent.get("generation_series", [])
+            if str(item).strip()
+        ]
+    )
+    if any(item not in {"res", "solar", "wind"} for item in generation_series):
         raise ValueError("The model returned unsupported generation series.")
 
     include_prices = bool(intent.get("include_prices", False))
+    if not generation_series and _message_implies_res_generation(normalized_message):
+        generation_series = ["res"]
     if not generation_series and not include_prices:
         raise ValueError("No supported metric was found in the query.")
 

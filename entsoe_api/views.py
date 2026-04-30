@@ -187,14 +187,9 @@ def _now_utc() -> dt.datetime:
 
 
 CHART_GENERATION_SERIES = {
+    "res": {"label": "RES (solar + wind)", "psr_types": {"B16", "B18", "B19"}},
     "solar": {"label": "Solar", "psr_types": {"B16"}},
     "wind": {"label": "Wind", "psr_types": {"B18", "B19"}},
-}
-
-CHART_GENERATION_PSR_TO_SERIES = {
-    psr_type: series_key
-    for series_key, meta in CHART_GENERATION_SERIES.items()
-    for psr_type in meta["psr_types"]
 }
 
 
@@ -216,17 +211,20 @@ def _chart_average(values: List[float]) -> float | None:
 
 
 def _build_generation_chart_panel(query: ParsedChartQuery) -> dict:
+    requested_psr_types = sorted(
+        {
+            psr_type
+            for series_key in query.generation_series
+            for psr_type in CHART_GENERATION_SERIES[series_key]["psr_types"]
+        }
+    )
     rows = (
         CountryResGenerationByType.objects
         .filter(
             country_id__in=query.countries,
             datetime_utc__gte=query.start_utc,
             datetime_utc__lt=query.end_utc,
-            psr_type__in=[
-                psr_type
-                for series_key in query.generation_series
-                for psr_type in CHART_GENERATION_SERIES[series_key]["psr_types"]
-            ],
+            psr_type__in=requested_psr_types,
         )
         .order_by("datetime_utc", "psr_type")
         .values("country_id", "datetime_utc", "psr_type", "generation_mw")
@@ -237,11 +235,11 @@ def _build_generation_chart_panel(query: ParsedChartQuery) -> dict:
         generation_value = row["generation_mw"]
         if generation_value is None:
             continue
-        series_key = CHART_GENERATION_PSR_TO_SERIES.get(row["psr_type"])
-        if not series_key:
-            continue
         timestamp = _ensure_utc(row["datetime_utc"])
-        timestamp_totals[(row["country_id"], series_key, timestamp)] += float(generation_value)
+        for series_key in query.generation_series:
+            if row["psr_type"] not in CHART_GENERATION_SERIES[series_key]["psr_types"]:
+                continue
+            timestamp_totals[(row["country_id"], series_key, timestamp)] += float(generation_value)
 
     grouped_values: dict[tuple[str, str, dt.datetime], List[float]] = defaultdict(list)
     for (country_code, series_key, timestamp), total_value in timestamp_totals.items():
@@ -525,7 +523,7 @@ class ChartQueryView(APIView):
         description=(
             "Accepts a constrained natural-language request, maps it to known metrics, "
             "queries the database, and returns chart-ready JSON panels. "
-            "The first version supports solar generation, wind generation, and day-ahead prices."
+            "The first version supports RES (solar + wind), solar generation, wind generation, and day-ahead prices."
         ),
         request=ChartQueryRequestSerializer,
         responses={

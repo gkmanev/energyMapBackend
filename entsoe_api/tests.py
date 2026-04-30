@@ -162,6 +162,72 @@ class ChartQueryParserTest(SimpleTestCase):
         self.assertEqual(parsed.start_utc, dt.datetime(2026, 4, 1, 0, 0, tzinfo=dt.timezone.utc))
         self.assertEqual(parsed.end_utc, dt.datetime(2026, 4, 29, 0, 0, tzinfo=dt.timezone.utc))
 
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
+    @patch("entsoe_api.chart_query.requests.post")
+    def test_parses_res_query_when_model_returns_res_series(self, mock_post):
+        mock_post.return_value = MockOpenAIResponse(
+            {
+                "status": "completed",
+                "output_text": json.dumps(
+                    {
+                        "country": "BG",
+                        "countries": ["BG", "RO"],
+                        "resolution": "d",
+                        "generation_series": ["res"],
+                        "include_prices": False,
+                        "timeframe": {
+                            "kind": "last_n_weeks",
+                            "amount": 4,
+                            "start_utc": None,
+                            "end_utc": None,
+                        },
+                    }
+                ),
+            }
+        )
+
+        parsed = parse_chart_query(
+            "Compare the RES generation for BG and RO last month",
+            now_utc=dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc),
+        )
+
+        self.assertEqual(parsed.country, "BG")
+        self.assertEqual(parsed.countries, ["BG", "RO"])
+        self.assertEqual(parsed.resolution, "d")
+        self.assertEqual(parsed.generation_series, ["res"])
+        self.assertFalse(parsed.include_prices)
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
+    @patch("entsoe_api.chart_query.requests.post")
+    def test_falls_back_to_res_when_message_mentions_renewables(self, mock_post):
+        mock_post.return_value = MockOpenAIResponse(
+            {
+                "status": "completed",
+                "output_text": json.dumps(
+                    {
+                        "country": "BG",
+                        "countries": ["BG"],
+                        "resolution": "d",
+                        "generation_series": [],
+                        "include_prices": False,
+                        "timeframe": {
+                            "kind": "last_n_weeks",
+                            "amount": 4,
+                            "start_utc": None,
+                            "end_utc": None,
+                        },
+                    }
+                ),
+            }
+        )
+
+        parsed = parse_chart_query(
+            "Show renewable generation for BG last month",
+            now_utc=dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc),
+        )
+
+        self.assertEqual(parsed.generation_series, ["res"])
+
 
 class FetchGenerationEsoBgHelpersTest(SimpleTestCase):
     def test_extract_results_accepts_paginated_payload(self):
@@ -342,11 +408,38 @@ class ChartQueryApiTest(TestCase):
                 resolution="PT60M",
             )
 
-        for timestamp, price in [
-            (dt.datetime(2026, 4, 15, 0, 0, tzinfo=dt.timezone.utc), 40.0),
-            (dt.datetime(2026, 4, 15, 1, 0, tzinfo=dt.timezone.utc), 60.0),
-            (dt.datetime(2026, 4, 16, 0, 0, tzinfo=dt.timezone.utc), 110.0),
+        for timestamp, solar, wind_offshore, wind_onshore, price in [
+            (dt.datetime(2026, 4, 15, 0, 0, tzinfo=dt.timezone.utc), 8.0, 2.0, 4.0, 40.0),
+            (dt.datetime(2026, 4, 15, 1, 0, tzinfo=dt.timezone.utc), 12.0, 3.0, 5.0, 60.0),
+            (dt.datetime(2026, 4, 16, 0, 0, tzinfo=dt.timezone.utc), 16.0, 4.0, 6.0, 110.0),
         ]:
+            CountryResGenerationByType.objects.create(
+                country_id="RO",
+                datetime_utc=timestamp,
+                psr_type="B16",
+                psr_name="Solar",
+                generation_mw=solar,
+                unit="MW",
+                resolution="PT60M",
+            )
+            CountryResGenerationByType.objects.create(
+                country_id="RO",
+                datetime_utc=timestamp,
+                psr_type="B18",
+                psr_name="Wind Offshore",
+                generation_mw=wind_offshore,
+                unit="MW",
+                resolution="PT60M",
+            )
+            CountryResGenerationByType.objects.create(
+                country_id="RO",
+                datetime_utc=timestamp,
+                psr_type="B19",
+                psr_name="Wind Onshore",
+                generation_mw=wind_onshore,
+                unit="MW",
+                resolution="PT60M",
+            )
             CountryPricePoint.objects.create(
                 country_id="RO",
                 datetime_utc=timestamp,
@@ -455,3 +548,49 @@ class ChartQueryApiTest(TestCase):
         self.assertEqual([series["id"] for series in prices_panel["series"]], ["bg", "ro"])
         self.assertEqual(prices_panel["series"][0]["data"][0]["value"], 70.0)
         self.assertEqual(prices_panel["series"][1]["data"][0]["value"], 50.0)
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
+    @patch("entsoe_api.chart_query.requests.post")
+    @patch("entsoe_api.views._now_utc")
+    def test_chart_query_returns_multi_country_res_panel(self, mock_now_utc, mock_post):
+        mock_now_utc.return_value = dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc)
+        mock_post.return_value = MockOpenAIResponse(
+            {
+                "status": "completed",
+                "output_text": json.dumps(
+                    {
+                        "country": "BG",
+                        "countries": ["BG", "RO"],
+                        "resolution": "d",
+                        "generation_series": ["res"],
+                        "include_prices": False,
+                        "timeframe": {
+                            "kind": "last_n_weeks",
+                            "amount": 4,
+                            "start_utc": None,
+                            "end_utc": None,
+                        },
+                    }
+                ),
+            }
+        )
+
+        response = self.client.post(
+            "/api/chart-query/",
+            data=json.dumps({
+                "message": "Compare the RES generation for BG and RO last month",
+            }),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["query"]["generation_series"], ["res"])
+
+        generation_panel = payload["panels"][0]
+        self.assertEqual(generation_panel["id"], "generation")
+        self.assertEqual(generation_panel["title"], "BG vs RO renewable generation")
+        self.assertEqual([series["id"] for series in generation_panel["series"]], ["bg_res", "ro_res"])
+        self.assertEqual(generation_panel["series"][0]["name"], "BG RES (solar + wind)")
+        self.assertEqual(generation_panel["series"][0]["data"][0]["value"], 22.0)
+        self.assertEqual(generation_panel["series"][1]["data"][0]["value"], 17.0)
