@@ -151,6 +151,33 @@ def _message_implies_res_generation(message: str) -> bool:
     return bool(re.search(r"\bres\b|\brenewable(?:s)?\b", lowered))
 
 
+def _message_mentions_resolution(message: str) -> bool:
+    lowered = message.lower()
+    return bool(
+        re.search(
+            r"\b(hour|hours|hourly|daily|day-by-day|monthly|yearly|annual|native|raw)\b",
+            lowered,
+        )
+    )
+
+
+def _infer_default_resolution(
+    requested_resolution: str,
+    message: str,
+    start_utc: dt.datetime,
+    end_utc: dt.datetime,
+) -> str:
+    if requested_resolution:
+        return requested_resolution
+    if _message_mentions_resolution(message):
+        return requested_resolution
+
+    window = end_utc - start_utc
+    if window >= dt.timedelta(days=28):
+        return "d"
+    return requested_resolution
+
+
 def _extract_output_text(response_json: dict) -> str:
     output_text = response_json.get("output_text")
     if isinstance(output_text, str) and output_text.strip():
@@ -305,6 +332,13 @@ def parse_chart_query(message: str, *, now_utc: dt.datetime) -> ParsedChartQuery
     start_utc, end_utc, time_phrase = _compute_window_from_intent(timeframe, now_utc)
     if start_utc >= end_utc:
         raise ValueError("The parsed start time must be earlier than end time.")
+
+    resolution = _infer_default_resolution(
+        resolution,
+        normalized_message,
+        start_utc,
+        end_utc,
+    )
 
     resolution_label = {
         "": "native",

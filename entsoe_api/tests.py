@@ -228,6 +228,70 @@ class ChartQueryParserTest(SimpleTestCase):
 
         self.assertEqual(parsed.generation_series, ["res"])
 
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
+    @patch("entsoe_api.chart_query.requests.post")
+    def test_defaults_last_month_to_daily_when_resolution_is_omitted(self, mock_post):
+        mock_post.return_value = MockOpenAIResponse(
+            {
+                "status": "completed",
+                "output_text": json.dumps(
+                    {
+                        "country": "BG",
+                        "countries": ["BG", "RO"],
+                        "resolution": "native",
+                        "generation_series": ["res"],
+                        "include_prices": False,
+                        "timeframe": {
+                            "kind": "last_n_weeks",
+                            "amount": 4,
+                            "start_utc": None,
+                            "end_utc": None,
+                        },
+                    }
+                ),
+            }
+        )
+
+        parsed = parse_chart_query(
+            "Compare the RES generation for BG and RO last month",
+            now_utc=dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc),
+        )
+
+        self.assertEqual(parsed.resolution, "d")
+        self.assertEqual(parsed.time_phrase, "last 4 weeks at daily resolution")
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
+    @patch("entsoe_api.chart_query.requests.post")
+    def test_defaults_short_windows_to_native_when_resolution_is_omitted(self, mock_post):
+        mock_post.return_value = MockOpenAIResponse(
+            {
+                "status": "completed",
+                "output_text": json.dumps(
+                    {
+                        "country": "BG",
+                        "countries": ["BG"],
+                        "resolution": "native",
+                        "generation_series": ["wind"],
+                        "include_prices": False,
+                        "timeframe": {
+                            "kind": "last_n_days",
+                            "amount": 2,
+                            "start_utc": None,
+                            "end_utc": None,
+                        },
+                    }
+                ),
+            }
+        )
+
+        parsed = parse_chart_query(
+            "Show the wind generation for BG for the last couple of days",
+            now_utc=dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc),
+        )
+
+        self.assertEqual(parsed.resolution, "")
+        self.assertEqual(parsed.time_phrase, "last 2 days")
+
 
 class FetchGenerationEsoBgHelpersTest(SimpleTestCase):
     def test_extract_results_accepts_paginated_payload(self):
