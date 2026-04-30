@@ -292,6 +292,88 @@ class ChartQueryParserTest(SimpleTestCase):
         self.assertEqual(parsed.resolution, "")
         self.assertEqual(parsed.time_phrase, "last 2 days")
 
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
+    @patch("entsoe_api.chart_query.requests.post")
+    def test_visual_follow_up_reuses_previous_query_context(self, mock_post):
+        mock_post.return_value = MockOpenAIResponse(
+            {
+                "status": "completed",
+                "output_text": json.dumps(
+                    {
+                        "country": "",
+                        "countries": [],
+                        "resolution": "native",
+                        "generation_series": [],
+                        "include_prices": False,
+                        "chart_type": "bar",
+                        "timeframe": {
+                            "kind": "today",
+                            "amount": None,
+                            "start_utc": None,
+                            "end_utc": None,
+                        },
+                    }
+                ),
+            }
+        )
+
+        parsed = parse_chart_query(
+            "can you make it as bar chart",
+            now_utc=dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc),
+            previous_query={
+                "country": "BG",
+                "countries": ["BG", "RO"],
+                "start_utc": "2026-04-01T00:00:00Z",
+                "end_utc": "2026-04-29T00:00:00Z",
+                "resolution": "d",
+                "time_phrase": "last 4 weeks at daily resolution",
+                "generation_series": ["res"],
+                "include_prices": False,
+                "chart_type": "line",
+            },
+        )
+
+        self.assertEqual(parsed.countries, ["BG", "RO"])
+        self.assertEqual(parsed.generation_series, ["res"])
+        self.assertEqual(parsed.chart_type, "bar")
+        self.assertEqual(parsed.start_utc, dt.datetime(2026, 4, 1, 0, 0, tzinfo=dt.timezone.utc))
+        self.assertEqual(parsed.end_utc, dt.datetime(2026, 4, 29, 0, 0, tzinfo=dt.timezone.utc))
+        self.assertEqual(parsed.resolution, "d")
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
+    @patch("entsoe_api.chart_query.requests.post")
+    def test_visual_follow_up_without_context_returns_actionable_error(self, mock_post):
+        mock_post.return_value = MockOpenAIResponse(
+            {
+                "status": "completed",
+                "output_text": json.dumps(
+                    {
+                        "country": "",
+                        "countries": [],
+                        "resolution": "native",
+                        "generation_series": [],
+                        "include_prices": False,
+                        "chart_type": "bar",
+                        "timeframe": {
+                            "kind": "today",
+                            "amount": None,
+                            "start_utc": None,
+                            "end_utc": None,
+                        },
+                    }
+                ),
+            }
+        )
+
+        with self.assertRaisesMessage(
+            ValueError,
+            "For follow-ups like 'make it a bar chart', send previous_query from the prior response or repeat the metric and date range.",
+        ):
+            parse_chart_query(
+                "can you make it as bar chart",
+                now_utc=dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc),
+            )
+
 
 class FetchGenerationEsoBgHelpersTest(SimpleTestCase):
     def test_extract_results_accepts_paginated_payload(self):
@@ -658,3 +740,57 @@ class ChartQueryApiTest(TestCase):
         self.assertEqual(generation_panel["series"][0]["name"], "BG RES (solar + wind)")
         self.assertEqual(generation_panel["series"][0]["data"][0]["value"], 22.0)
         self.assertEqual(generation_panel["series"][1]["data"][0]["value"], 17.0)
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
+    @patch("entsoe_api.chart_query.requests.post")
+    @patch("entsoe_api.views._now_utc")
+    def test_chart_query_follow_up_can_switch_to_bar_chart(self, mock_now_utc, mock_post):
+        mock_now_utc.return_value = dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc)
+        mock_post.return_value = MockOpenAIResponse(
+            {
+                "status": "completed",
+                "output_text": json.dumps(
+                    {
+                        "country": "",
+                        "countries": [],
+                        "resolution": "native",
+                        "generation_series": [],
+                        "include_prices": False,
+                        "chart_type": "bar",
+                        "timeframe": {
+                            "kind": "today",
+                            "amount": None,
+                            "start_utc": None,
+                            "end_utc": None,
+                        },
+                    }
+                ),
+            }
+        )
+
+        response = self.client.post(
+            "/api/chart-query/",
+            data=json.dumps({
+                "message": "can you make it as bar chart",
+                "previous_query": {
+                    "country": "BG",
+                    "countries": ["BG", "RO"],
+                    "start_utc": "2026-04-01T00:00:00Z",
+                    "end_utc": "2026-04-29T00:00:00Z",
+                    "resolution": "d",
+                    "time_phrase": "last 4 weeks at daily resolution",
+                    "generation_series": ["res"],
+                    "include_prices": False,
+                    "chart_type": "line",
+                },
+            }),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["query"]["chart_type"], "bar")
+        self.assertEqual(payload["query"]["countries"], ["BG", "RO"])
+        self.assertEqual(payload["query"]["generation_series"], ["res"])
+        self.assertEqual(payload["panels"][0]["type"], "bar")
+        self.assertIn("bar chart", payload["assistant_message"])

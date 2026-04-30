@@ -219,6 +219,13 @@ class ChartQueryRequestSerializer(serializers.Serializer):
     message = serializers.CharField(
         help_text="Simple text query, for example 'Show the wind and solar generation for BG for the last two weeks daily resolution as well as the prices'."
     )
+    previous_query = serializers.JSONField(
+        required=False,
+        help_text=(
+            "Optional prior query metadata from the previous chart-query response. "
+            "Use this for follow-ups such as 'make it a bar chart'."
+        ),
+    )
 
 
 class ChartQueryPointSerializer(serializers.Serializer):
@@ -252,10 +259,12 @@ class ChartQueryMetadataSerializer(serializers.Serializer):
     time_phrase = serializers.CharField()
     generation_series = serializers.ListField(child=serializers.CharField())
     include_prices = serializers.BooleanField()
+    chart_type = serializers.CharField()
 
 
 class ChartQueryResponseSerializer(serializers.Serializer):
     query = ChartQueryMetadataSerializer()
+    assistant_message = serializers.CharField()
     panels = ChartQueryPanelSerializer(many=True)
 
 

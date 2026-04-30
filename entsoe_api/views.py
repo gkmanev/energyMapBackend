@@ -258,7 +258,7 @@ def _build_generation_chart_panel(query: ParsedChartQuery) -> dict:
         return {
             "id": "generation",
             "title": f"{query.country} renewable generation",
-            "type": "line",
+            "type": query.chart_type,
             "x_key": "datetime_utc",
             "unit": "MW",
             "series": [
@@ -291,7 +291,7 @@ def _build_generation_chart_panel(query: ParsedChartQuery) -> dict:
     return {
         "id": "generation",
         "title": f"{' vs '.join(query.countries)} renewable generation",
-        "type": "line",
+        "type": query.chart_type,
         "x_key": "datetime_utc",
         "unit": "MW",
         "series": [
@@ -340,7 +340,7 @@ def _build_price_chart_panel(query: ParsedChartQuery) -> dict:
         return {
             "id": "prices",
             "title": f"{query.country} day-ahead prices",
-            "type": "line",
+            "type": query.chart_type,
             "x_key": "datetime_utc",
             "unit": "EUR/MWh",
             "series": [
@@ -364,7 +364,7 @@ def _build_price_chart_panel(query: ParsedChartQuery) -> dict:
     return {
         "id": "prices",
         "title": f"{' vs '.join(query.countries)} day-ahead prices",
-        "type": "line",
+        "type": query.chart_type,
         "x_key": "datetime_utc",
         "unit": "EUR/MWh",
         "series": [
@@ -377,6 +377,26 @@ def _build_price_chart_panel(query: ParsedChartQuery) -> dict:
             for country_code in query.countries
         ],
     }
+
+
+def _describe_chart_query(query: ParsedChartQuery) -> str:
+    if query.include_prices and query.generation_series:
+        metric_text = "generation and prices"
+    elif query.include_prices:
+        metric_text = "day-ahead prices"
+    elif query.generation_series == ["res"]:
+        metric_text = "RES generation"
+    else:
+        metric_labels = {
+            "solar": "solar generation",
+            "wind": "wind generation",
+            "res": "RES generation",
+        }
+        metric_text = " and ".join(metric_labels.get(series_key, series_key) for series_key in query.generation_series)
+
+    country_text = " and ".join(query.countries)
+    chart_label = "bar chart" if query.chart_type == "bar" else "line chart"
+    return f"Showing {metric_text} for {country_text} for {query.time_phrase} as a {chart_label}."
 
 def _compute_window_utc(
     period: str | None,
@@ -535,6 +555,17 @@ class ChartQueryView(APIView):
                 "Chart query request",
                 value={
                     "message": "Show the wind and solar generation for BG for the last two weeks daily resolution as well as the prices",
+                    "previous_query": {
+                        "country": "BG",
+                        "countries": ["BG", "RO"],
+                        "start_utc": "2026-04-01T00:00:00Z",
+                        "end_utc": "2026-04-29T00:00:00Z",
+                        "resolution": "d",
+                        "time_phrase": "last 4 weeks at daily resolution",
+                        "generation_series": ["res"],
+                        "include_prices": False,
+                        "chart_type": "line",
+                    },
                 },
                 request_only=True,
             ),
@@ -552,7 +583,9 @@ class ChartQueryView(APIView):
                         "time_phrase": "last 2 weeks at daily resolution",
                         "generation_series": ["wind", "solar"],
                         "include_prices": True,
+                        "chart_type": "line",
                     },
+                    "assistant_message": "Showing generation and prices for BG for last 2 weeks at daily resolution as a line chart.",
                     "panels": [
                         {
                             "id": "generation",
@@ -605,6 +638,7 @@ class ChartQueryView(APIView):
             query = parse_chart_query(
                 serializer.validated_data["message"],
                 now_utc=_now_utc(),
+                previous_query=serializer.validated_data.get("previous_query"),
             )
             _validate_countries_or_400(query.countries)
         except ValueError as e:
@@ -628,7 +662,9 @@ class ChartQueryView(APIView):
                     "time_phrase": query.time_phrase,
                     "generation_series": query.generation_series,
                     "include_prices": query.include_prices,
+                    "chart_type": query.chart_type,
                 },
+                "assistant_message": _describe_chart_query(query),
                 "panels": panels,
             },
             status=200,

@@ -34,6 +34,10 @@ INTENT_JSON_SCHEMA = {
                 "items": {"type": "string", "enum": ["res", "solar", "wind"]},
             },
             "include_prices": {"type": "boolean"},
+            "chart_type": {
+                "type": "string",
+                "enum": ["line", "bar"],
+            },
             "timeframe": {
                 "type": "object",
                 "additionalProperties": False,
@@ -76,6 +80,7 @@ INTENT_JSON_SCHEMA = {
             "resolution",
             "generation_series",
             "include_prices",
+            "chart_type",
             "timeframe",
         ],
     },
@@ -89,6 +94,7 @@ Rules:
 - Map requests for "RES", "renewables", or "renewable generation" to res unless the user explicitly asks for specific types.
 - In this API, res means the available A69 renewable set: solar + wind.
 - Supported non-generation metric is prices, mapped to include_prices=true.
+- Supported chart types are line and bar.
 - Countries must be 2-letter ISO codes.
 - Always fill countries as an array in the same order as the request.
 - If country is included, set it to the first requested country for compatibility.
@@ -100,6 +106,7 @@ Rules:
 - For "last two weeks" style requests, return timeframe.kind=last_n_weeks and amount=2.
 - For explicit UTC ranges, use timeframe.kind=explicit_utc_range and fill start_utc/end_utc.
 - If the request asks for unsupported metrics, omit them rather than inventing new ones.
+- If the user asks for a bar or line chart, set chart_type accordingly. Otherwise use line.
 - If no supported metric is requested, return empty generation_series and include_prices=false.
 """
 
@@ -115,6 +122,7 @@ class ParsedChartQuery:
     time_phrase: str
     generation_series: list[str] = field(default_factory=list)
     include_prices: bool = False
+    chart_type: str = "line"
 
 
 def _ensure_utc(value: dt.datetime) -> dt.datetime:
@@ -151,6 +159,11 @@ def _message_implies_res_generation(message: str) -> bool:
     return bool(re.search(r"\bres\b|\brenewable(?:s)?\b", lowered))
 
 
+def _message_mentions_supported_metric(message: str) -> bool:
+    lowered = message.lower()
+    return bool(re.search(r"\bprice(?:s)?\b|\bres\b|\brenewable(?:s)?\b|\bsolar\b|\bwind\b", lowered))
+
+
 def _message_mentions_resolution(message: str) -> bool:
     lowered = message.lower()
     return bool(
@@ -158,6 +171,34 @@ def _message_mentions_resolution(message: str) -> bool:
             r"\b(hour|hours|hourly|daily|day-by-day|monthly|yearly|annual|native|raw)\b",
             lowered,
         )
+    )
+
+
+def _extract_chart_type(message: str) -> str | None:
+    lowered = message.lower()
+    if re.search(r"\b(bar|bars|column|columns)(?:\s+chart)?\b", lowered):
+        return "bar"
+    if re.search(r"\bline(?:\s+chart)?\b", lowered):
+        return "line"
+    return None
+
+
+def _message_mentions_timeframe(message: str) -> bool:
+    lowered = message.lower()
+    return bool(
+        re.search(
+            r"\b(today|yesterday|last|week|weeks|month|months|year|years|from|to|between|daily|monthly|yearly|annual)\b",
+            lowered,
+        )
+        or re.search(r"\d{4}-\d{2}-\d{2}", lowered)
+    )
+
+
+def _looks_like_visualization_follow_up(message: str) -> bool:
+    return (
+        _extract_chart_type(message) is not None
+        and not _message_mentions_supported_metric(message)
+        and not _message_mentions_timeframe(message)
     )
 
 
@@ -194,7 +235,7 @@ def _extract_output_text(response_json: dict) -> str:
     raise ValueError("OpenAI response did not contain structured output text.")
 
 
-def _call_openai_for_intent(message: str) -> dict:
+def _call_openai_for_intent(message: str, *, previous_query: dict | None = None) -> dict:
     api_key = getattr(settings, "OPENAI_API_KEY", "") or ""
     if not api_key:
         raise ValueError("OPENAI_API_KEY is not configured.")
@@ -202,12 +243,24 @@ def _call_openai_for_intent(message: str) -> dict:
     model = getattr(settings, "OPENAI_CHART_QUERY_MODEL", "gpt-4o-mini")
     timeout_seconds = getattr(settings, "OPENAI_CHART_QUERY_TIMEOUT", 30)
 
+    input_items = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if previous_query:
+        input_items.append(
+            {
+                "role": "system",
+                "content": (
+                    "Previous chart query context is provided as JSON below. "
+                    "If the latest user message is a follow-up such as a chart-style change, "
+                    "reuse the previous metric, countries, resolution, and timeframe unless the user explicitly changes them.\n"
+                    f"{json.dumps(previous_query, sort_keys=True)}"
+                ),
+            }
+        )
+    input_items.append({"role": "user", "content": message})
+
     payload = {
         "model": model,
-        "input": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": message},
-        ],
+        "input": input_items,
         "text": {
             "format": {
                 "type": "json_schema",
@@ -248,6 +301,111 @@ def _call_openai_for_intent(message: str) -> dict:
     return json.loads(_extract_output_text(response_json))
 
 
+def _format_utc_z(value: dt.datetime) -> str:
+    return _ensure_utc(value).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _normalize_previous_query(previous_query: dict | None) -> dict | None:
+    if not isinstance(previous_query, dict):
+        return None
+
+    raw_countries = previous_query.get("countries")
+    countries: list[str] = []
+    if isinstance(raw_countries, list):
+        countries = _ordered_unique(
+            [
+                str(item).strip().upper()
+                for item in raw_countries
+                if str(item).strip() and len(str(item).strip()) == 2
+            ]
+        )
+
+    country = str(previous_query.get("country", "")).strip().upper()
+    if not countries and len(country) == 2:
+        countries = [country]
+    if not countries:
+        return None
+
+    generation_series = _ordered_unique(
+        [
+            str(item).strip().lower()
+            for item in previous_query.get("generation_series", [])
+            if str(item).strip().lower() in {"res", "solar", "wind"}
+        ]
+    )
+    include_prices = bool(previous_query.get("include_prices", False))
+    if not generation_series and not include_prices:
+        return None
+
+    start_raw = previous_query.get("start_utc")
+    end_raw = previous_query.get("end_utc")
+    if not start_raw or not end_raw:
+        return None
+
+    start_utc = _parse_utc_value(str(start_raw))
+    end_utc = _parse_utc_value(str(end_raw))
+    if start_utc >= end_utc:
+        return None
+
+    resolution = str(previous_query.get("resolution", "")).strip().lower()
+    if resolution not in {"", "d", "m", "y"}:
+        resolution = ""
+
+    chart_type = str(previous_query.get("chart_type", "line")).strip().lower()
+    if chart_type not in {"line", "bar"}:
+        chart_type = "line"
+
+    resolved_country = country if country in countries else countries[0]
+    return {
+        "country": resolved_country,
+        "countries": countries,
+        "start_utc": start_utc,
+        "end_utc": end_utc,
+        "resolution": resolution,
+        "generation_series": generation_series,
+        "include_prices": include_prices,
+        "chart_type": chart_type,
+    }
+
+
+def _merge_with_previous_query(intent: dict, message: str, previous_query: dict | None) -> dict:
+    normalized_previous = _normalize_previous_query(previous_query)
+    if normalized_previous is None:
+        return intent
+
+    merged_intent = dict(intent)
+    requested_chart_type = _extract_chart_type(message)
+    if requested_chart_type:
+        merged_intent["chart_type"] = requested_chart_type
+
+    if _looks_like_visualization_follow_up(message):
+        return {
+            "country": normalized_previous["country"],
+            "countries": normalized_previous["countries"],
+            "resolution": normalized_previous["resolution"] or "native",
+            "generation_series": normalized_previous["generation_series"],
+            "include_prices": normalized_previous["include_prices"],
+            "chart_type": merged_intent.get("chart_type", normalized_previous["chart_type"]),
+            "timeframe": {
+                "kind": "explicit_utc_range",
+                "amount": None,
+                "start_utc": _format_utc_z(normalized_previous["start_utc"]),
+                "end_utc": _format_utc_z(normalized_previous["end_utc"]),
+            },
+        }
+
+    if not merged_intent.get("generation_series") and not merged_intent.get("include_prices", False):
+        merged_intent["generation_series"] = normalized_previous["generation_series"]
+        merged_intent["include_prices"] = normalized_previous["include_prices"]
+
+    raw_countries = merged_intent.get("countries")
+    if not isinstance(raw_countries, list) or not any(str(item).strip() for item in raw_countries):
+        merged_intent["countries"] = normalized_previous["countries"]
+        merged_intent["country"] = normalized_previous["country"]
+
+    return merged_intent
+
+
 def _compute_window_from_intent(timeframe: dict, now_utc: dt.datetime) -> tuple[dt.datetime, dt.datetime, str]:
     today_utc = _ensure_utc(now_utc).replace(hour=0, minute=0, second=0, microsecond=0)
     kind = timeframe["kind"]
@@ -276,12 +434,20 @@ def _compute_window_from_intent(timeframe: dict, now_utc: dt.datetime) -> tuple[
     raise ValueError(f"Unsupported timeframe kind '{kind}'.")
 
 
-def parse_chart_query(message: str, *, now_utc: dt.datetime) -> ParsedChartQuery:
+def parse_chart_query(message: str, *, now_utc: dt.datetime, previous_query: dict | None = None) -> ParsedChartQuery:
     normalized_message = (message or "").strip()
     if not normalized_message:
         raise ValueError("message is required.")
 
-    intent = _call_openai_for_intent(normalized_message)
+    normalized_previous = _normalize_previous_query(previous_query)
+    if _looks_like_visualization_follow_up(normalized_message) and normalized_previous is None:
+        raise ValueError(
+            "No supported metric was found in the query. For follow-ups like 'make it a bar chart', "
+            "send previous_query from the prior response or repeat the metric and date range."
+        )
+
+    intent = _call_openai_for_intent(normalized_message, previous_query=previous_query)
+    intent = _merge_with_previous_query(intent, normalized_message, normalized_previous)
 
     raw_countries = intent.get("countries")
     countries: list[str] = []
@@ -323,7 +489,16 @@ def parse_chart_query(message: str, *, now_utc: dt.datetime) -> ParsedChartQuery
     if not generation_series and _message_implies_res_generation(normalized_message):
         generation_series = ["res"]
     if not generation_series and not include_prices:
+        if _extract_chart_type(normalized_message):
+            raise ValueError(
+                "No supported metric was found in the query. For follow-ups like 'make it a bar chart', "
+                "send previous_query from the prior response or repeat the metric and date range."
+            )
         raise ValueError("No supported metric was found in the query.")
+
+    chart_type = str(intent.get("chart_type", "line")).strip().lower()
+    if chart_type not in {"line", "bar"}:
+        chart_type = _extract_chart_type(normalized_message) or "line"
 
     timeframe = intent.get("timeframe")
     if not isinstance(timeframe, dict):
@@ -346,6 +521,11 @@ def parse_chart_query(message: str, *, now_utc: dt.datetime) -> ParsedChartQuery
         "m": "monthly",
         "y": "yearly",
     }[resolution]
+    time_phrase_override = None
+    if _looks_like_visualization_follow_up(normalized_message) and isinstance(previous_query, dict):
+        raw_time_phrase = previous_query.get("time_phrase")
+        if isinstance(raw_time_phrase, str) and raw_time_phrase.strip():
+            time_phrase_override = raw_time_phrase.strip()
 
     return ParsedChartQuery(
         original_message=normalized_message,
@@ -354,7 +534,8 @@ def parse_chart_query(message: str, *, now_utc: dt.datetime) -> ParsedChartQuery
         start_utc=start_utc,
         end_utc=end_utc,
         resolution=resolution,
-        time_phrase=f"{time_phrase} at {resolution_label} resolution" if resolution else time_phrase,
+        time_phrase=time_phrase_override or (f"{time_phrase} at {resolution_label} resolution" if resolution else time_phrase),
         generation_series=generation_series,
         include_prices=include_prices,
+        chart_type=chart_type,
     )
