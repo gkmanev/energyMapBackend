@@ -410,7 +410,13 @@ def _extract_output_text(response_json: dict) -> str:
     raise ValueError("OpenAI response did not contain structured output text.")
 
 
-def _call_openai_for_intent(message: str, *, previous_query: dict | None = None) -> dict:
+def _call_openai_for_intent(
+    message: str,
+    *,
+    previous_query: dict | None = None,
+    conversation_messages: list[dict[str, str]] | None = None,
+    pending_clarification: dict | None = None,
+) -> dict:
     api_key = getattr(settings, "OPENAI_API_KEY", "") or ""
     if not api_key:
         raise ValueError("OPENAI_API_KEY is not configured.")
@@ -431,6 +437,29 @@ def _call_openai_for_intent(message: str, *, previous_query: dict | None = None)
                 ),
             }
         )
+    if pending_clarification:
+        input_items.append(
+            {
+                "role": "system",
+                "content": (
+                    "The previous assistant turn asked the user for clarification. "
+                    "Use the latest user message primarily as an answer to that question when possible.\n"
+                    f"{json.dumps(pending_clarification, sort_keys=True)}"
+                ),
+            }
+        )
+    if conversation_messages:
+        input_items.append(
+            {
+                "role": "system",
+                "content": "Recent conversation history follows. Use it as context, but prioritize the latest user message for explicit changes.",
+            }
+        )
+        for conversation_message in conversation_messages:
+            role = str(conversation_message.get("role", "")).strip().lower()
+            content = str(conversation_message.get("content", "")).strip()
+            if role in {"user", "assistant"} and content:
+                input_items.append({"role": role, "content": content})
     input_items.append({"role": "user", "content": message})
 
     payload = {
@@ -819,13 +848,25 @@ def _parse_ready_chart_query(
     )
 
 
-def parse_chart_query(message: str, *, now_utc: dt.datetime, previous_query: dict | None = None) -> ChartQueryAgentResult:
+def parse_chart_query(
+    message: str,
+    *,
+    now_utc: dt.datetime,
+    previous_query: dict | None = None,
+    conversation_messages: list[dict[str, str]] | None = None,
+    pending_clarification: dict | None = None,
+) -> ChartQueryAgentResult:
     normalized_message = (message or "").strip()
     if not normalized_message:
         raise ValueError("message is required.")
 
     normalized_previous = _normalize_previous_query(previous_query)
-    analysis = _call_openai_for_intent(normalized_message, previous_query=previous_query)
+    analysis = _call_openai_for_intent(
+        normalized_message,
+        previous_query=previous_query,
+        conversation_messages=conversation_messages,
+        pending_clarification=pending_clarification,
+    )
 
     if _looks_like_visualization_follow_up(normalized_message) and normalized_previous is None:
         missing_fields = ["metric", "country", "timeframe"]

@@ -6,6 +6,7 @@ import pandas as pd
 from django.core.cache import cache
 from django.test import SimpleTestCase, TestCase, override_settings
 
+from entsoe_api.chart_conversation import load_chart_conversation
 from entsoe_api.chart_query import parse_chart_query
 from entsoe_api.entsoe_data import EntsoeGenerationForecastByType
 from entsoe_api.helper import save_country_wind_speed_df
@@ -472,6 +473,51 @@ class ChartQueryParserTest(SimpleTestCase):
         self.assertEqual(result.status, "needs_clarification")
         self.assertEqual(result.clarification.missing_fields, ["timeframe"])
         self.assertEqual(result.clarification.question, "What time range should I use for BG prices?")
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
+    @patch("entsoe_api.chart_query.requests.post")
+    def test_passes_recent_conversation_context_to_openai(self, mock_post):
+        mock_post.return_value = MockOpenAIResponse(
+            {
+                "status": "completed",
+                "output_text": json.dumps(
+                    {
+                        "country": "BG",
+                        "countries": ["BG"],
+                        "resolution": "d",
+                        "generation_series": [],
+                        "include_prices": True,
+                        "chart_type": "line",
+                        "timeframe": {
+                            "kind": "last_n_weeks",
+                            "amount": 4,
+                            "start_utc": None,
+                            "end_utc": None,
+                        },
+                    }
+                ),
+            }
+        )
+
+        result = parse_chart_query(
+            "last month",
+            now_utc=dt.datetime(2026, 4, 30, 13, 0, tzinfo=dt.timezone.utc),
+            previous_query=None,
+            conversation_messages=[
+                {"role": "user", "content": "Show me the prices for BG"},
+                {"role": "assistant", "content": "What time range should I use for BG prices?"},
+            ],
+            pending_clarification={
+                "question": "What time range should I use for BG prices?",
+                "missing_fields": ["timeframe"],
+            },
+        )
+
+        self.assertEqual(result.status, "ready")
+        payload_input = mock_post.call_args.kwargs["json"]["input"]
+        self.assertTrue(any(item["role"] == "assistant" and item["content"] == "What time range should I use for BG prices?" for item in payload_input))
+        self.assertTrue(any(item["role"] == "user" and item["content"] == "Show me the prices for BG" for item in payload_input))
+        self.assertEqual(payload_input[-1], {"role": "user", "content": "last month"})
 
 
 class FetchGenerationEsoBgHelpersTest(SimpleTestCase):
@@ -988,3 +1034,86 @@ class ChartQueryApiTest(TestCase):
         self.assertEqual(payload["clarifying_question"], "Which country and what time range should I use for the chart?")
         self.assertEqual(payload["clarification"]["missing_fields"], ["country", "timeframe"])
         self.assertEqual(payload["panels"], [])
+        self.assertTrue(payload["conversation_id"])
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
+    @patch("entsoe_api.chart_query.requests.post")
+    @patch("entsoe_api.views._now_utc")
+    def test_chart_query_reuses_redis_conversation_context_for_follow_up(self, mock_now_utc, mock_post):
+        mock_now_utc.return_value = dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc)
+        mock_post.side_effect = [
+            MockOpenAIResponse(
+                {
+                    "status": "completed",
+                    "output_text": json.dumps(
+                        {
+                            "country": "BG",
+                            "countries": ["BG", "RO"],
+                            "resolution": "d",
+                            "generation_series": ["res"],
+                            "include_prices": False,
+                            "chart_type": "line",
+                            "timeframe": {
+                                "kind": "last_n_weeks",
+                                "amount": 4,
+                                "start_utc": None,
+                                "end_utc": None,
+                            },
+                        }
+                    ),
+                }
+            ),
+            MockOpenAIResponse(
+                {
+                    "status": "completed",
+                    "output_text": json.dumps(
+                        {
+                            "country": "",
+                            "countries": [],
+                            "resolution": "native",
+                            "generation_series": [],
+                            "include_prices": False,
+                            "chart_type": "bar",
+                            "timeframe": {
+                                "kind": "today",
+                                "amount": None,
+                                "start_utc": None,
+                                "end_utc": None,
+                            },
+                        }
+                    ),
+                }
+            ),
+        ]
+
+        first_response = self.client.post(
+            "/api/chart-query/",
+            data=json.dumps({
+                "message": "Compare the RES generation for BG and RO last month",
+            }),
+            content_type="application/json",
+        )
+        first_payload = first_response.json()
+        conversation_id = first_payload["conversation_id"]
+
+        second_response = self.client.post(
+            "/api/chart-query/",
+            data=json.dumps({
+                "message": "can you make it as bar chart",
+                "conversation_id": conversation_id,
+            }),
+            content_type="application/json",
+        )
+
+        second_payload = second_response.json()
+        self.assertEqual(second_response.status_code, 200)
+        self.assertEqual(second_payload["status"], "ready")
+        self.assertEqual(second_payload["conversation_id"], conversation_id)
+        self.assertEqual(second_payload["query"]["chart_type"], "bar")
+        self.assertEqual(second_payload["query"]["countries"], ["BG", "RO"])
+        self.assertEqual(second_payload["query"]["generation_series"], ["res"])
+
+        conversation = load_chart_conversation(conversation_id)
+        self.assertIsNotNone(conversation)
+        self.assertEqual(len(conversation["messages"]), 4)
+        self.assertEqual(conversation["previous_query"]["chart_type"], "bar")

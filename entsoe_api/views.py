@@ -77,6 +77,12 @@ from .api_docs import (
     WindSpeedBulkResponseSerializer,
     WindSpeedResponseSerializer,
 )
+from .chart_conversation import (
+    append_chart_conversation_turn,
+    conversation_messages_for_model,
+    generate_conversation_id,
+    load_chart_conversation,
+)
 from .chart_query import ParsedChartQuery, parse_chart_query
 
 logger = logging.getLogger(__name__)
@@ -563,6 +569,7 @@ class ChartQueryView(APIView):
                 "Chart query response",
                 response_only=True,
                 value={
+                    "conversation_id": "7d4d9300-4a6f-44be-b59f-7c648cc44062",
                     "status": "ready",
                     "query": {
                         "original_message": "Compare RES generation for BG and RO for April. Daily resolution",
@@ -608,6 +615,7 @@ class ChartQueryView(APIView):
                 "Clarification response",
                 response_only=True,
                 value={
+                    "conversation_id": "7d4d9300-4a6f-44be-b59f-7c648cc44062",
                     "status": "needs_clarification",
                     "query": None,
                     "assistant_message": "Which country and what time range should I use for the chart?",
@@ -628,19 +636,48 @@ class ChartQueryView(APIView):
         if serializer.errors:
             return Response(serializer.errors, status=400)
 
+        requested_conversation_id = str(serializer.validated_data.get("conversation_id", "")).strip()
+        conversation_id = requested_conversation_id or generate_conversation_id()
+        conversation = load_chart_conversation(requested_conversation_id)
+        conversation_previous_query = None
+        conversation_pending_clarification = None
+        if isinstance(conversation, dict):
+            raw_previous_query = conversation.get("previous_query")
+            if isinstance(raw_previous_query, dict):
+                conversation_previous_query = raw_previous_query
+            raw_pending_clarification = conversation.get("pending_clarification")
+            if isinstance(raw_pending_clarification, dict):
+                conversation_pending_clarification = raw_pending_clarification
+
+        previous_query = serializer.validated_data.get("previous_query") or conversation_previous_query
+
         try:
             result = parse_chart_query(
                 serializer.validated_data["message"],
                 now_utc=_now_utc(),
-                previous_query=serializer.validated_data.get("previous_query"),
+                previous_query=previous_query,
+                conversation_messages=conversation_messages_for_model(conversation),
+                pending_clarification=conversation_pending_clarification,
             )
         except ValueError as e:
             return Response({"detail": str(e)}, status=400)
 
         if result.status == "needs_clarification":
             clarification = result.clarification
+            append_chart_conversation_turn(
+                conversation_id,
+                user_message=serializer.validated_data["message"],
+                assistant_message=clarification.question,
+                status="needs_clarification",
+                previous_query=previous_query,
+                pending_clarification={
+                    "question": clarification.question,
+                    "missing_fields": clarification.missing_fields,
+                },
+            )
             return Response(
                 {
+                    "conversation_id": conversation_id,
                     "status": "needs_clarification",
                     "query": None,
                     "assistant_message": clarification.question,
@@ -667,22 +704,34 @@ class ChartQueryView(APIView):
         if query.include_prices:
             panels.append(_build_price_chart_panel(query))
 
+        query_payload = {
+            "original_message": query.original_message,
+            "country": query.country,
+            "countries": query.countries,
+            "start_utc": _fmt_z(query.start_utc),
+            "end_utc": _fmt_z(query.end_utc),
+            "resolution": query.resolution,
+            "time_phrase": query.time_phrase,
+            "generation_series": query.generation_series,
+            "include_prices": query.include_prices,
+            "chart_type": query.chart_type,
+        }
+        assistant_message = _describe_chart_query(query)
+        append_chart_conversation_turn(
+            conversation_id,
+            user_message=serializer.validated_data["message"],
+            assistant_message=assistant_message,
+            status="ready",
+            previous_query=query_payload,
+            pending_clarification=None,
+        )
+
         return Response(
             {
+                "conversation_id": conversation_id,
                 "status": "ready",
-                "query": {
-                    "original_message": query.original_message,
-                    "country": query.country,
-                    "countries": query.countries,
-                    "start_utc": _fmt_z(query.start_utc),
-                    "end_utc": _fmt_z(query.end_utc),
-                    "resolution": query.resolution,
-                    "time_phrase": query.time_phrase,
-                    "generation_series": query.generation_series,
-                    "include_prices": query.include_prices,
-                    "chart_type": query.chart_type,
-                },
-                "assistant_message": _describe_chart_query(query),
+                "query": query_payload,
+                "assistant_message": assistant_message,
                 "clarifying_question": None,
                 "clarification": None,
                 "panels": panels,

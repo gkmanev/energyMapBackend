@@ -219,11 +219,18 @@ class ChartQueryRequestSerializer(serializers.Serializer):
     message = serializers.CharField(
         help_text="Simple text query, for example 'Show the wind and solar generation for BG for the last two weeks daily resolution as well as the prices'."
     )
+    conversation_id = serializers.CharField(
+        required=False,
+        help_text=(
+            "Optional conversation identifier. When provided, the backend loads prior chart-query turns "
+            "from Redis and uses them as context for follow-up messages."
+        ),
+    )
     previous_query = serializers.JSONField(
         required=False,
         help_text=(
             "Optional prior query metadata from the previous chart-query response. "
-            "Use this for follow-ups such as 'make it a bar chart'."
+            "This is mainly for stateless clients; conversation_id is preferred for follow-ups."
         ),
     )
 
@@ -269,6 +276,7 @@ class ChartQueryClarificationSerializer(serializers.Serializer):
 
 
 class ChartQueryResponseSerializer(serializers.Serializer):
+    conversation_id = serializers.CharField()
     status = serializers.ChoiceField(choices=["ready", "needs_clarification"])
     query = ChartQueryMetadataSerializer(required=False, allow_null=True)
     assistant_message = serializers.CharField()
