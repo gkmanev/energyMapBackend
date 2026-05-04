@@ -13,17 +13,33 @@ from django.utils.dateparse import parse_date, parse_datetime
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 
 INTENT_JSON_SCHEMA = {
-    "name": "chart_query_intent",
+    "name": "chart_query_analysis",
     "strict": True,
     "schema": {
         "type": "object",
         "additionalProperties": False,
         "properties": {
+            "decision": {
+                "type": "string",
+                "enum": ["ready", "needs_clarification"],
+            },
+            "clarifying_question": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "null"},
+                ]
+            },
+            "missing_fields": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": ["metric", "country", "timeframe"],
+                },
+            },
             "country": {"type": "string"},
             "countries": {
                 "type": "array",
                 "items": {"type": "string"},
-                "minItems": 1,
             },
             "resolution": {
                 "type": "string",
@@ -50,6 +66,7 @@ INTENT_JSON_SCHEMA = {
                             "last_n_days",
                             "last_n_weeks",
                             "explicit_utc_range",
+                            "unknown",
                         ],
                     },
                     "amount": {
@@ -75,6 +92,9 @@ INTENT_JSON_SCHEMA = {
             },
         },
         "required": [
+            "decision",
+            "clarifying_question",
+            "missing_fields",
             "country",
             "countries",
             "resolution",
@@ -86,10 +106,18 @@ INTENT_JSON_SCHEMA = {
     },
 }
 
-SYSTEM_PROMPT = """You convert user chart requests into a strict JSON intent.
+SYSTEM_PROMPT = """You analyze user chart requests for a chart-query API and return strict JSON.
 
 Rules:
 - Return only data matching the provided JSON schema.
+- First decide whether the request has enough information to prepare a database query and chart-ready JSON.
+- Use decision=ready only when the request can be resolved into:
+  - at least one supported metric,
+  - at least one country,
+  - and a usable timeframe.
+- Use decision=needs_clarification when the request is ambiguous, underspecified, or asks only for a follow-up style change without enough previous context.
+- When decision=needs_clarification, write one concise clarifying_question that asks only for the missing information. Mention supported metrics when relevant.
+- missing_fields may only contain metric, country, timeframe.
 - Supported generation series are only: res, solar, wind.
 - Map requests for "RES", "renewables", or "renewable generation" to res unless the user explicitly asks for specific types.
 - In this API, res means the available A69 renewable set: solar + wind.
@@ -105,9 +133,11 @@ Rules:
   - y: yearly
 - For "last two weeks" style requests, return timeframe.kind=last_n_weeks and amount=2.
 - For explicit UTC ranges, use timeframe.kind=explicit_utc_range and fill start_utc/end_utc.
+- If the timeframe is unclear or absent, use timeframe.kind=unknown.
 - If the request asks for unsupported metrics, omit them rather than inventing new ones.
 - If the user asks for a bar or line chart, set chart_type accordingly. Otherwise use line.
-- If no supported metric is requested, return empty generation_series and include_prices=false.
+- If no supported metric is requested, return empty generation_series and include_prices=false and prefer decision=needs_clarification.
+- Missing chart type or missing resolution alone should not force clarification.
 """
 
 
@@ -123,6 +153,26 @@ class ParsedChartQuery:
     generation_series: list[str] = field(default_factory=list)
     include_prices: bool = False
     chart_type: str = "line"
+
+
+@dataclass(frozen=True)
+class ChartQueryClarification:
+    original_message: str
+    question: str
+    missing_fields: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ChartQueryAgentResult:
+    status: str
+    query: ParsedChartQuery | None = None
+    clarification: ChartQueryClarification | None = None
+
+
+class ChartQueryNeedsClarification(ValueError):
+    def __init__(self, missing_fields: list[str], message: str = "The request needs clarification."):
+        super().__init__(message)
+        self.missing_fields = _ordered_unique([field for field in missing_fields if field])
 
 
 def _ensure_utc(value: dt.datetime) -> dt.datetime:
@@ -555,40 +605,128 @@ def _compute_window_from_intent(timeframe: dict, now_utc: dt.datetime) -> tuple[
         if not start_raw or not end_raw:
             raise ValueError("explicit_utc_range requires start_utc and end_utc.")
         return _parse_utc_value(start_raw), _parse_utc_value(end_raw), "custom range"
+    if kind == "unknown":
+        raise ChartQueryNeedsClarification(["timeframe"])
 
     raise ValueError(f"Unsupported timeframe kind '{kind}'.")
 
 
-def parse_chart_query(message: str, *, now_utc: dt.datetime, previous_query: dict | None = None) -> ParsedChartQuery:
-    normalized_message = (message or "").strip()
-    if not normalized_message:
-        raise ValueError("message is required.")
+def _fallback_clarifying_question(missing_fields: list[str]) -> str:
+    missing = set(missing_fields)
+    if missing == {"metric"}:
+        return "Which metric do you want to chart: RES generation, solar, wind, or day-ahead prices?"
+    if missing == {"country"}:
+        return "Which country should I use for the chart?"
+    if missing == {"timeframe"}:
+        return "What time range should I use for the chart?"
+    if missing == {"metric", "country"}:
+        return "Which metric do you want to chart, and for which country?"
+    if missing == {"metric", "timeframe"}:
+        return "Which metric do you want to chart, and what time range should I use?"
+    if missing == {"country", "timeframe"}:
+        return "Which country and what time range should I use for the chart?"
+    return (
+        "Which metric do you want to chart, for which country, and for what time range? "
+        "Supported metrics are RES generation, solar, wind, and day-ahead prices."
+    )
 
-    normalized_previous = _normalize_previous_query(previous_query)
-    if _looks_like_visualization_follow_up(normalized_message) and normalized_previous is None:
-        raise ValueError(
-            "No supported metric was found in the query. For follow-ups like 'make it a bar chart', "
-            "send previous_query from the prior response or repeat the metric and date range."
-        )
 
-    intent = _call_openai_for_intent(normalized_message, previous_query=previous_query)
-    intent = _merge_with_previous_query(intent, normalized_message, normalized_previous)
+def _build_clarification_result(
+    message: str,
+    analysis: dict,
+    missing_fields: list[str],
+) -> ChartQueryAgentResult:
+    normalized_missing_fields = _ordered_unique(
+        [
+            str(field).strip().lower()
+            for field in missing_fields
+            if str(field).strip().lower() in {"metric", "country", "timeframe"}
+        ]
+    )
+    question = str(analysis.get("clarifying_question") or "").strip() or _fallback_clarifying_question(normalized_missing_fields)
+    return ChartQueryAgentResult(
+        status="needs_clarification",
+        clarification=ChartQueryClarification(
+            original_message=message,
+            question=question,
+            missing_fields=normalized_missing_fields,
+        ),
+    )
 
-    explicit_countries = _extract_countries_from_message(normalized_message)
+
+def _apply_explicit_message_overrides(intent: dict, message: str) -> dict:
+    overridden_intent = dict(intent)
+
+    explicit_countries = _extract_countries_from_message(message)
     if explicit_countries:
-        intent["countries"] = explicit_countries
-        intent["country"] = explicit_countries[0]
+        overridden_intent["countries"] = explicit_countries
+        overridden_intent["country"] = explicit_countries[0]
 
-    explicit_resolution = _extract_resolution_from_message(normalized_message)
+    explicit_resolution = _extract_resolution_from_message(message)
     if explicit_resolution is not None:
-        intent["resolution"] = explicit_resolution or "native"
+        overridden_intent["resolution"] = explicit_resolution or "native"
 
-    explicit_metrics = _extract_metrics_from_message(normalized_message)
+    explicit_metrics = _extract_metrics_from_message(message)
     if explicit_metrics is not None:
         generation_series_override, include_prices_override = explicit_metrics
-        intent["generation_series"] = generation_series_override
-        intent["include_prices"] = include_prices_override
+        overridden_intent["generation_series"] = generation_series_override
+        overridden_intent["include_prices"] = include_prices_override
 
+    return overridden_intent
+
+
+def _infer_missing_fields(intent: dict, *, message: str, now_utc: dt.datetime) -> list[str]:
+    missing_fields: list[str] = []
+
+    raw_countries = intent.get("countries")
+    countries: list[str] = []
+    if isinstance(raw_countries, list):
+        countries = [
+            str(item).strip().upper()
+            for item in raw_countries
+            if str(item).strip()
+        ]
+    compatibility_country = str(intent.get("country", "")).strip().upper()
+    if not countries and compatibility_country:
+        countries = [compatibility_country]
+    if not countries:
+        missing_fields.append("country")
+
+    generation_series = [
+        str(item).strip().lower()
+        for item in intent.get("generation_series", [])
+        if str(item).strip()
+    ]
+    include_prices = bool(intent.get("include_prices", False))
+    if not generation_series and not include_prices and not _message_implies_res_generation(message):
+        missing_fields.append("metric")
+
+    explicit_month_window = _extract_calendar_month_window(message, now_utc)
+    if explicit_month_window is None:
+        timeframe = intent.get("timeframe")
+        if not isinstance(timeframe, dict):
+            missing_fields.append("timeframe")
+        else:
+            kind = str(timeframe.get("kind", "")).strip().lower()
+            if kind == "unknown":
+                missing_fields.append("timeframe")
+            elif kind in {"last_n_days", "last_n_weeks"} and not isinstance(timeframe.get("amount"), int):
+                missing_fields.append("timeframe")
+            elif kind == "explicit_utc_range" and (not timeframe.get("start_utc") or not timeframe.get("end_utc")):
+                missing_fields.append("timeframe")
+            elif kind not in {"today", "yesterday", "last_n_days", "last_n_weeks", "explicit_utc_range"}:
+                missing_fields.append("timeframe")
+
+    return _ordered_unique(missing_fields)
+
+
+def _parse_ready_chart_query(
+    intent: dict,
+    *,
+    message: str,
+    now_utc: dt.datetime,
+    previous_query: dict | None = None,
+) -> ParsedChartQuery:
     raw_countries = intent.get("countries")
     countries: list[str] = []
     if isinstance(raw_countries, list):
@@ -604,7 +742,9 @@ def parse_chart_query(message: str, *, now_utc: dt.datetime, previous_query: dic
     if not countries and compatibility_country:
         countries = [compatibility_country]
 
-    if not countries or any(len(country_code) != 2 or not country_code.isalpha() for country_code in countries):
+    if not countries:
+        raise ChartQueryNeedsClarification(["country"])
+    if any(len(country_code) != 2 or not country_code.isalpha() for country_code in countries):
         raise ValueError("The model did not return valid 2-letter country codes.")
 
     country = compatibility_country if compatibility_country in countries else countries[0]
@@ -626,34 +766,29 @@ def parse_chart_query(message: str, *, now_utc: dt.datetime, previous_query: dic
         raise ValueError("The model returned unsupported generation series.")
 
     include_prices = bool(intent.get("include_prices", False))
-    if not generation_series and _message_implies_res_generation(normalized_message):
+    if not generation_series and _message_implies_res_generation(message):
         generation_series = ["res"]
     if not generation_series and not include_prices:
-        if _extract_chart_type(normalized_message):
-            raise ValueError(
-                "No supported metric was found in the query. For follow-ups like 'make it a bar chart', "
-                "send previous_query from the prior response or repeat the metric and date range."
-            )
-        raise ValueError("No supported metric was found in the query.")
+        raise ChartQueryNeedsClarification(["metric"])
 
     chart_type = str(intent.get("chart_type", "line")).strip().lower()
     if chart_type not in {"line", "bar"}:
-        chart_type = _extract_chart_type(normalized_message) or "line"
+        chart_type = _extract_chart_type(message) or "line"
 
     timeframe = intent.get("timeframe")
-    explicit_month_window = _extract_calendar_month_window(normalized_message, now_utc)
+    explicit_month_window = _extract_calendar_month_window(message, now_utc)
     if explicit_month_window is not None:
         start_utc, end_utc, time_phrase = explicit_month_window
     else:
         if not isinstance(timeframe, dict):
-            raise ValueError("The model did not return a valid timeframe object.")
+            raise ChartQueryNeedsClarification(["timeframe"])
         start_utc, end_utc, time_phrase = _compute_window_from_intent(timeframe, now_utc)
     if start_utc >= end_utc:
         raise ValueError("The parsed start time must be earlier than end time.")
 
     resolution = _infer_default_resolution(
         resolution,
-        normalized_message,
+        message,
         start_utc,
         end_utc,
     )
@@ -665,13 +800,13 @@ def parse_chart_query(message: str, *, now_utc: dt.datetime, previous_query: dic
         "y": "yearly",
     }[resolution]
     time_phrase_override = None
-    if _looks_like_visualization_follow_up(normalized_message) and isinstance(previous_query, dict):
+    if _looks_like_visualization_follow_up(message) and isinstance(previous_query, dict):
         raw_time_phrase = previous_query.get("time_phrase")
         if isinstance(raw_time_phrase, str) and raw_time_phrase.strip():
             time_phrase_override = raw_time_phrase.strip()
 
     return ParsedChartQuery(
-        original_message=normalized_message,
+        original_message=message,
         country=country,
         countries=countries,
         start_utc=start_utc,
@@ -682,3 +817,55 @@ def parse_chart_query(message: str, *, now_utc: dt.datetime, previous_query: dic
         include_prices=include_prices,
         chart_type=chart_type,
     )
+
+
+def parse_chart_query(message: str, *, now_utc: dt.datetime, previous_query: dict | None = None) -> ChartQueryAgentResult:
+    normalized_message = (message or "").strip()
+    if not normalized_message:
+        raise ValueError("message is required.")
+
+    normalized_previous = _normalize_previous_query(previous_query)
+    analysis = _call_openai_for_intent(normalized_message, previous_query=previous_query)
+
+    if _looks_like_visualization_follow_up(normalized_message) and normalized_previous is None:
+        missing_fields = ["metric", "country", "timeframe"]
+        model_missing_fields = analysis.get("missing_fields")
+        if isinstance(model_missing_fields, list):
+            missing_fields = _ordered_unique(
+                missing_fields
+                + [
+                    str(field).strip().lower()
+                    for field in model_missing_fields
+                    if str(field).strip().lower() in {"metric", "country", "timeframe"}
+                ]
+            )
+        return _build_clarification_result(normalized_message, analysis, missing_fields)
+
+    intent = _merge_with_previous_query(analysis, normalized_message, normalized_previous)
+    intent = _apply_explicit_message_overrides(intent, normalized_message)
+
+    try:
+        query = _parse_ready_chart_query(
+            intent,
+            message=normalized_message,
+            now_utc=now_utc,
+            previous_query=previous_query,
+        )
+    except ChartQueryNeedsClarification as exc:
+        missing_fields = _ordered_unique(
+            exc.missing_fields
+            + _infer_missing_fields(intent, message=normalized_message, now_utc=now_utc)
+        )
+        model_missing_fields = analysis.get("missing_fields")
+        if isinstance(model_missing_fields, list):
+            missing_fields = _ordered_unique(
+                missing_fields
+                + [
+                    str(field).strip().lower()
+                    for field in model_missing_fields
+                    if str(field).strip().lower() in {"metric", "country", "timeframe"}
+                ]
+            )
+        return _build_clarification_result(normalized_message, analysis, missing_fields)
+
+    return ChartQueryAgentResult(status="ready", query=query)

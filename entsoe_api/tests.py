@@ -111,11 +111,14 @@ class ChartQueryParserTest(SimpleTestCase):
             }
         )
 
-        parsed = parse_chart_query(
+        result = parse_chart_query(
             "Show the wind and solar generation for BG for the last two weeks daily resolution as well as the prices",
             now_utc=dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc),
         )
 
+        self.assertEqual(result.status, "ready")
+        parsed = result.query
+        self.assertIsNotNone(parsed)
         self.assertEqual(parsed.country, "BG")
         self.assertEqual(parsed.countries, ["BG"])
         self.assertEqual(parsed.resolution, "d")
@@ -149,11 +152,14 @@ class ChartQueryParserTest(SimpleTestCase):
             }
         )
 
-        parsed = parse_chart_query(
+        result = parse_chart_query(
             "Compare the prices for BG and RO for the last month. Daily resolution",
             now_utc=dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc),
         )
 
+        self.assertEqual(result.status, "ready")
+        parsed = result.query
+        self.assertIsNotNone(parsed)
         self.assertEqual(parsed.country, "BG")
         self.assertEqual(parsed.countries, ["BG", "RO"])
         self.assertEqual(parsed.resolution, "d")
@@ -186,11 +192,14 @@ class ChartQueryParserTest(SimpleTestCase):
             }
         )
 
-        parsed = parse_chart_query(
+        result = parse_chart_query(
             "Compare the RES generation for BG and RO last month",
             now_utc=dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc),
         )
 
+        self.assertEqual(result.status, "ready")
+        parsed = result.query
+        self.assertIsNotNone(parsed)
         self.assertEqual(parsed.country, "BG")
         self.assertEqual(parsed.countries, ["BG", "RO"])
         self.assertEqual(parsed.resolution, "d")
@@ -221,11 +230,14 @@ class ChartQueryParserTest(SimpleTestCase):
             }
         )
 
-        parsed = parse_chart_query(
+        result = parse_chart_query(
             "Show renewable generation for BG last month",
             now_utc=dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc),
         )
 
+        self.assertEqual(result.status, "ready")
+        parsed = result.query
+        self.assertIsNotNone(parsed)
         self.assertEqual(parsed.generation_series, ["res"])
 
     @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
@@ -252,11 +264,14 @@ class ChartQueryParserTest(SimpleTestCase):
             }
         )
 
-        parsed = parse_chart_query(
+        result = parse_chart_query(
             "Compare the RES generation for BG and RO last month",
             now_utc=dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc),
         )
 
+        self.assertEqual(result.status, "ready")
+        parsed = result.query
+        self.assertIsNotNone(parsed)
         self.assertEqual(parsed.resolution, "d")
         self.assertEqual(parsed.time_phrase, "last 4 weeks at daily resolution")
 
@@ -284,11 +299,14 @@ class ChartQueryParserTest(SimpleTestCase):
             }
         )
 
-        parsed = parse_chart_query(
+        result = parse_chart_query(
             "Show the wind generation for BG for the last couple of days",
             now_utc=dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc),
         )
 
+        self.assertEqual(result.status, "ready")
+        parsed = result.query
+        self.assertIsNotNone(parsed)
         self.assertEqual(parsed.resolution, "")
         self.assertEqual(parsed.time_phrase, "last 2 days")
 
@@ -317,7 +335,7 @@ class ChartQueryParserTest(SimpleTestCase):
             }
         )
 
-        parsed = parse_chart_query(
+        result = parse_chart_query(
             "can you make it as bar chart",
             now_utc=dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc),
             previous_query={
@@ -333,6 +351,9 @@ class ChartQueryParserTest(SimpleTestCase):
             },
         )
 
+        self.assertEqual(result.status, "ready")
+        parsed = result.query
+        self.assertIsNotNone(parsed)
         self.assertEqual(parsed.countries, ["BG", "RO"])
         self.assertEqual(parsed.generation_series, ["res"])
         self.assertEqual(parsed.chart_type, "bar")
@@ -365,14 +386,14 @@ class ChartQueryParserTest(SimpleTestCase):
             }
         )
 
-        with self.assertRaisesMessage(
-            ValueError,
-            "For follow-ups like 'make it a bar chart', send previous_query from the prior response or repeat the metric and date range.",
-        ):
-            parse_chart_query(
-                "can you make it as bar chart",
-                now_utc=dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc),
-            )
+        result = parse_chart_query(
+            "can you make it as bar chart",
+            now_utc=dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc),
+        )
+
+        self.assertEqual(result.status, "needs_clarification")
+        self.assertEqual(result.clarification.missing_fields, ["metric", "country", "timeframe"])
+        self.assertIn("Which metric", result.clarification.question)
 
     @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
     @patch("entsoe_api.chart_query.requests.post")
@@ -398,11 +419,14 @@ class ChartQueryParserTest(SimpleTestCase):
             }
         )
 
-        parsed = parse_chart_query(
+        result = parse_chart_query(
             "Compare res generation for BG and RO for April. Daily resolution",
             now_utc=dt.datetime(2026, 4, 30, 13, 0, tzinfo=dt.timezone.utc),
         )
 
+        self.assertEqual(result.status, "ready")
+        parsed = result.query
+        self.assertIsNotNone(parsed)
         self.assertEqual(parsed.country, "BG")
         self.assertEqual(parsed.countries, ["BG", "RO"])
         self.assertEqual(parsed.resolution, "d")
@@ -411,6 +435,43 @@ class ChartQueryParserTest(SimpleTestCase):
         self.assertEqual(parsed.start_utc, dt.datetime(2026, 4, 1, 0, 0, tzinfo=dt.timezone.utc))
         self.assertEqual(parsed.end_utc, dt.datetime(2026, 4, 30, 0, 0, tzinfo=dt.timezone.utc))
         self.assertEqual(parsed.time_phrase, "April at daily resolution")
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
+    @patch("entsoe_api.chart_query.requests.post")
+    def test_returns_clarification_when_timeframe_is_missing(self, mock_post):
+        mock_post.return_value = MockOpenAIResponse(
+            {
+                "status": "completed",
+                "output_text": json.dumps(
+                    {
+                        "decision": "needs_clarification",
+                        "clarifying_question": "What time range should I use for BG prices?",
+                        "missing_fields": ["timeframe"],
+                        "country": "BG",
+                        "countries": ["BG"],
+                        "resolution": "native",
+                        "generation_series": [],
+                        "include_prices": True,
+                        "chart_type": "line",
+                        "timeframe": {
+                            "kind": "unknown",
+                            "amount": None,
+                            "start_utc": None,
+                            "end_utc": None,
+                        },
+                    }
+                ),
+            }
+        )
+
+        result = parse_chart_query(
+            "Show me BG prices",
+            now_utc=dt.datetime(2026, 4, 30, 13, 0, tzinfo=dt.timezone.utc),
+        )
+
+        self.assertEqual(result.status, "needs_clarification")
+        self.assertEqual(result.clarification.missing_fields, ["timeframe"])
+        self.assertEqual(result.clarification.question, "What time range should I use for BG prices?")
 
 
 class FetchGenerationEsoBgHelpersTest(SimpleTestCase):
@@ -670,6 +731,7 @@ class ChartQueryApiTest(TestCase):
 
         payload = response.json()
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["status"], "ready")
         self.assertEqual(payload["query"]["country"], "BG")
         self.assertEqual(payload["query"]["countries"], ["BG"])
         self.assertEqual(payload["query"]["start_utc"], "2026-04-15T00:00:00Z")
@@ -723,6 +785,7 @@ class ChartQueryApiTest(TestCase):
 
         payload = response.json()
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["status"], "ready")
         self.assertEqual(payload["query"]["country"], "BG")
         self.assertEqual(payload["query"]["countries"], ["BG", "RO"])
 
@@ -769,6 +832,7 @@ class ChartQueryApiTest(TestCase):
 
         payload = response.json()
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["status"], "ready")
         self.assertEqual(payload["query"]["generation_series"], ["res"])
 
         generation_panel = payload["panels"][0]
@@ -827,6 +891,7 @@ class ChartQueryApiTest(TestCase):
 
         payload = response.json()
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["status"], "ready")
         self.assertEqual(payload["query"]["chart_type"], "bar")
         self.assertEqual(payload["query"]["countries"], ["BG", "RO"])
         self.assertEqual(payload["query"]["generation_series"], ["res"])
@@ -869,6 +934,7 @@ class ChartQueryApiTest(TestCase):
 
         payload = response.json()
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["status"], "ready")
         self.assertEqual(payload["query"]["countries"], ["BG", "RO"])
         self.assertEqual(payload["query"]["generation_series"], ["res"])
         self.assertFalse(payload["query"]["include_prices"])
@@ -876,3 +942,49 @@ class ChartQueryApiTest(TestCase):
         self.assertEqual(payload["query"]["end_utc"], "2026-04-30T00:00:00Z")
         self.assertEqual(payload["panels"][0]["title"], "BG vs RO renewable generation")
         self.assertEqual([series["id"] for series in payload["panels"][0]["series"]], ["bg_res", "ro_res"])
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
+    @patch("entsoe_api.chart_query.requests.post")
+    @patch("entsoe_api.views._now_utc")
+    def test_chart_query_returns_clarifying_question_when_request_is_ambiguous(self, mock_now_utc, mock_post):
+        mock_now_utc.return_value = dt.datetime(2026, 4, 30, 13, 0, tzinfo=dt.timezone.utc)
+        mock_post.return_value = MockOpenAIResponse(
+            {
+                "status": "completed",
+                "output_text": json.dumps(
+                    {
+                        "decision": "needs_clarification",
+                        "clarifying_question": "Which country and what time range should I use for the chart?",
+                        "missing_fields": ["country", "timeframe"],
+                        "country": "",
+                        "countries": [],
+                        "resolution": "native",
+                        "generation_series": [],
+                        "include_prices": True,
+                        "chart_type": "line",
+                        "timeframe": {
+                            "kind": "unknown",
+                            "amount": None,
+                            "start_utc": None,
+                            "end_utc": None,
+                        },
+                    }
+                ),
+            }
+        )
+
+        response = self.client.post(
+            "/api/chart-query/",
+            data=json.dumps({
+                "message": "Show me the prices",
+            }),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["status"], "needs_clarification")
+        self.assertIsNone(payload["query"])
+        self.assertEqual(payload["clarifying_question"], "Which country and what time range should I use for the chart?")
+        self.assertEqual(payload["clarification"]["missing_fields"], ["country", "timeframe"])
+        self.assertEqual(payload["panels"], [])

@@ -262,9 +262,18 @@ class ChartQueryMetadataSerializer(serializers.Serializer):
     chart_type = serializers.CharField()
 
 
+class ChartQueryClarificationSerializer(serializers.Serializer):
+    original_message = serializers.CharField()
+    question = serializers.CharField()
+    missing_fields = serializers.ListField(child=serializers.CharField())
+
+
 class ChartQueryResponseSerializer(serializers.Serializer):
-    query = ChartQueryMetadataSerializer()
+    status = serializers.ChoiceField(choices=["ready", "needs_clarification"])
+    query = ChartQueryMetadataSerializer(required=False, allow_null=True)
     assistant_message = serializers.CharField()
+    clarifying_question = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    clarification = ChartQueryClarificationSerializer(required=False, allow_null=True)
     panels = ChartQueryPanelSerializer(many=True)
 
 

@@ -543,6 +543,7 @@ class ChartQueryView(APIView):
         description=(
             "Accepts a constrained natural-language request, maps it to known metrics, "
             "queries the database, and returns chart-ready JSON panels. "
+            "If the request is ambiguous or underspecified, it returns a clarifying question instead. "
             "The first version supports RES (solar + wind), solar generation, wind generation, and day-ahead prices."
         ),
         request=ChartQueryRequestSerializer,
@@ -562,6 +563,7 @@ class ChartQueryView(APIView):
                 "Chart query response",
                 response_only=True,
                 value={
+                    "status": "ready",
                     "query": {
                         "original_message": "Compare RES generation for BG and RO for April. Daily resolution",
                         "country": "BG",
@@ -575,6 +577,8 @@ class ChartQueryView(APIView):
                         "chart_type": "line",
                     },
                     "assistant_message": "Showing RES generation for BG and RO for April at daily resolution as a line chart.",
+                    "clarifying_question": None,
+                    "clarification": None,
                     "panels": [
                         {
                             "id": "generation",
@@ -600,6 +604,22 @@ class ChartQueryView(APIView):
                     ],
                 },
             ),
+            OpenApiExample(
+                "Clarification response",
+                response_only=True,
+                value={
+                    "status": "needs_clarification",
+                    "query": None,
+                    "assistant_message": "Which country and what time range should I use for the chart?",
+                    "clarifying_question": "Which country and what time range should I use for the chart?",
+                    "clarification": {
+                        "original_message": "Show me the prices",
+                        "question": "Which country and what time range should I use for the chart?",
+                        "missing_fields": ["country", "timeframe"],
+                    },
+                    "panels": [],
+                },
+            ),
         ],
     )
     def post(self, request):
@@ -609,14 +629,37 @@ class ChartQueryView(APIView):
             return Response(serializer.errors, status=400)
 
         try:
-            query = parse_chart_query(
+            result = parse_chart_query(
                 serializer.validated_data["message"],
                 now_utc=_now_utc(),
                 previous_query=serializer.validated_data.get("previous_query"),
             )
-            _validate_countries_or_400(query.countries)
         except ValueError as e:
             return Response({"detail": str(e)}, status=400)
+
+        if result.status == "needs_clarification":
+            clarification = result.clarification
+            return Response(
+                {
+                    "status": "needs_clarification",
+                    "query": None,
+                    "assistant_message": clarification.question,
+                    "clarifying_question": clarification.question,
+                    "clarification": {
+                        "original_message": clarification.original_message,
+                        "question": clarification.question,
+                        "missing_fields": clarification.missing_fields,
+                    },
+                    "panels": [],
+                },
+                status=200,
+            )
+
+        query = result.query
+        if query is None:
+            return Response({"detail": "Chart query result did not include a parsed query."}, status=400)
+
+        _validate_countries_or_400(query.countries)
 
         panels: list[dict] = []
         if query.generation_series:
@@ -626,6 +669,7 @@ class ChartQueryView(APIView):
 
         return Response(
             {
+                "status": "ready",
                 "query": {
                     "original_message": query.original_message,
                     "country": query.country,
@@ -639,6 +683,8 @@ class ChartQueryView(APIView):
                     "chart_type": query.chart_type,
                 },
                 "assistant_message": _describe_chart_query(query),
+                "clarifying_question": None,
+                "clarification": None,
                 "panels": panels,
             },
             status=200,
