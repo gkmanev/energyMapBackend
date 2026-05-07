@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python manage.py test entsoe_api)",
+      "Bash(entsoe_venv\\\\Scripts\\\\pip install *)",
+      "Bash(\"entsoe_venv/Scripts/pip.exe\" install *)",
+      "Bash(\"entsoe_venv/Scripts/python.exe\" manage.py test entsoe_api)",
+      "Bash(docker compose *)",
+      "Bash(\"entsoe_venv/Scripts/python.exe\" manage.py test entsoe_api.tests.ChartQueryParserTest)",
+      "Bash(\"entsoe_venv/Scripts/python.exe\" manage.py test entsoe_api.tests.GenerationForecastHelpersTest entsoe_api.tests.ParseIsoUtcFloorHourTest entsoe_api.tests.PartitionCountryCodesTest entsoe_api.tests.ChartQueryParserTest entsoe_api.tests.FetchGenerationEsoBgHelpersTest entsoe_api.tests.FetchGlobalTiltedIrradianceHelpersTest)"
+    ]
+  }
+}

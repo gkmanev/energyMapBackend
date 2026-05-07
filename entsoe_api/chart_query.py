@@ -163,8 +163,19 @@ LT, LU, LV, ME, MK, MT, NL, NO, PL, PT, RO, RS, SE, SI, SK, TR, UA, XK, GE and o
 
 ## Intent classification
 
-**chart** – User wants a time-series chart. Extract: data_type, countries, timeframe, resolution, generation_series / include_prices, chart_type.
-**data** – User wants statistics or aggregates (max price, average generation, total flows, etc.). Extract the same parameters as for chart.
+**chart** – User wants a time-series visualization. Triggers on: "show", "plot", "display", "chart",
+  "graph", "compare over time", "how did X change". Do NOT use "chart" when the user asks for a
+  single aggregate value. Extract: data_type, countries, timeframe, resolution, generation_series /
+  include_prices, chart_type.
+**data** – User wants a computed statistic, not a chart. Triggers on keywords like: average, avg,
+  mean, max, maximum, min, minimum, highest, lowest, total, sum, how many, count, number of,
+  "what was the", "what is the", "how much did", "days with", "hours above/below".
+  The backend will fetch the raw data and pass it back to Claude for analysis, so there is no
+  need to specify an aggregate function — just classify as "data" and extract the query parameters.
+  - Only supported for data_type "prices" and "generation_res".
+    For data_type "flows", "capacity", or "generation" use intent "chart" instead.
+  - Still extract countries, timeframe, generation_series / include_prices.
+  - Set resolution to "native" and chart_type to "line" (ignored for data intent).
 **text** – User asks a general question you can answer without hitting the database:
   - "What data do you have?" → describe available datasets
   - "Which countries are supported?" → list key European countries
@@ -232,6 +243,19 @@ class ParsedChartQuery:
 
 
 @dataclass(frozen=True)
+class ParsedDataQuery:
+    original_message: str
+    country: str
+    countries: list[str]
+    start_utc: dt.datetime
+    end_utc: dt.datetime
+    time_phrase: str
+    data_type: str          # "prices" | "generation_res"
+    generation_series: list[str] = field(default_factory=list)
+    include_prices: bool = False
+
+
+@dataclass(frozen=True)
 class ChartQueryClarification:
     original_message: str
     question: str
@@ -240,8 +264,8 @@ class ChartQueryClarification:
 
 @dataclass(frozen=True)
 class ChartQueryAgentResult:
-    status: str  # "ready" | "needs_clarification" | "text"
-    query: ParsedChartQuery | None = None
+    status: str  # "ready" | "data" | "needs_clarification" | "text"
+    query: ParsedChartQuery | ParsedDataQuery | None = None
     clarification: ChartQueryClarification | None = None
     text_answer: str | None = None
 
@@ -689,8 +713,8 @@ def _fallback_clarifying_question(missing_fields: list[str]) -> str:
     if missing == {"country", "timeframe"}:
         return "Which country and what time range should I use?"
     return (
-        "Could you be more specific? For example: "
-        "'RES generation for DE for the last 7 days' or 'day-ahead prices for FR in April 2025'."
+        "Which data would you like to see and for which country? "
+        "For example: 'RES generation for DE for the last 7 days' or 'day-ahead prices for FR in April 2025'."
     )
 
 
@@ -782,6 +806,72 @@ def _infer_missing_fields(intent: dict, *, message: str, now_utc: dt.datetime) -
     return _ordered_unique(missing_fields)
 
 
+_SUPPORTED_DATA_TYPES = {"prices", "generation_res"}
+
+
+def _parse_data_query(
+    intent: dict,
+    *,
+    message: str,
+    now_utc: dt.datetime,
+) -> "ParsedDataQuery | None":
+    """Returns None if data_type is unsupported (caller falls back to chart intent)."""
+    data_type = str(intent.get("data_type") or "").strip().lower()
+    if data_type not in _SUPPORTED_DATA_TYPES:
+        return None
+
+    raw_countries = intent.get("countries")
+    countries: list[str] = []
+    if isinstance(raw_countries, list):
+        countries = _ordered_unique(
+            [str(c).strip().upper() for c in raw_countries if str(c).strip()]
+        )
+    compat_country = str(intent.get("country", "")).strip().upper()
+    if not countries and compat_country:
+        countries = [compat_country]
+    if not countries:
+        raise ChartQueryNeedsClarification(["country"])
+    if any(len(c) != 2 or not c.isalpha() for c in countries):
+        raise ValueError("Claude returned invalid country codes.")
+    country = compat_country if compat_country in countries else countries[0]
+
+    explicit_month_window = _extract_calendar_month_window(message, now_utc)
+    if explicit_month_window is not None:
+        start_utc, end_utc, time_phrase = explicit_month_window
+    else:
+        timeframe = intent.get("timeframe")
+        if not isinstance(timeframe, dict):
+            raise ChartQueryNeedsClarification(["timeframe"])
+        start_utc, end_utc, time_phrase = _compute_window_from_intent(timeframe, now_utc)
+    if start_utc >= end_utc:
+        raise ValueError("Parsed start time must be earlier than end time.")
+
+    generation_series: list[str] = []
+    include_prices = False
+    if data_type == "prices":
+        include_prices = True
+    elif data_type == "generation_res":
+        generation_series = _ordered_unique(
+            [str(s).strip().lower() for s in intent.get("generation_series", []) if str(s).strip()]
+        )
+        if not generation_series and _message_implies_res_generation(message):
+            generation_series = ["res"]
+        if not generation_series:
+            raise ChartQueryNeedsClarification(["metric"])
+
+    return ParsedDataQuery(
+        original_message=message,
+        country=country,
+        countries=countries,
+        start_utc=start_utc,
+        end_utc=end_utc,
+        time_phrase=time_phrase,
+        data_type=data_type,
+        generation_series=generation_series,
+        include_prices=include_prices,
+    )
+
+
 def _parse_ready_chart_query(
     intent: dict,
     *,
@@ -866,6 +956,72 @@ def _parse_ready_chart_query(
     )
 
 
+# ─────────────────────── Data analysis (second Claude call) ──────────────────
+
+def build_data_description(query: ParsedDataQuery) -> str:
+    countries_str = ", ".join(query.countries)
+    if query.data_type == "prices":
+        return (
+            f"Day-ahead electricity prices (EUR/MWh) for {countries_str} — {query.time_phrase}. "
+            "Columns: date, avg_eur_mwh, max_eur_mwh, min_eur_mwh, hour_count."
+        )
+    series_str = " + ".join(query.generation_series) if query.generation_series else "RES"
+    return (
+        f"RES generation ({series_str}, MW) for {countries_str} — {query.time_phrase}. "
+        "Columns: date, avg_mw, max_mw, min_mw, hour_count."
+    )
+
+
+def call_claude_for_data_analysis(
+    question: str,
+    data_rows: list[dict],
+    *,
+    data_description: str,
+) -> str:
+    """Second Claude call: receives fetched data rows and answers the user's question."""
+    api_key = getattr(settings, "ANTHROPIC_API_KEY", "") or ""
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY is not configured.")
+
+    model = getattr(settings, "CLAUDE_CHAT_MODEL", "claude-sonnet-4-6")
+    timeout_seconds = float(getattr(settings, "CLAUDE_CHAT_TIMEOUT", 30))
+
+    system = (
+        "You are an energy data analyst. "
+        "Answer the user's question using only the dataset provided. "
+        "Be concise and always include specific numbers. "
+        "If the data is insufficient to answer precisely, say so clearly."
+    )
+
+    data_json = json.dumps(data_rows, default=str)
+    user_content = (
+        f"Dataset: {data_description}\n\n"
+        f"Data:\n{data_json}\n\n"
+        f"Question: {question}"
+    )
+
+    client = anthropic.Anthropic(api_key=api_key, timeout=timeout_seconds)
+    try:
+        response = client.messages.create(
+            model=model,
+            max_tokens=512,
+            system=system,
+            messages=[{"role": "user", "content": user_content}],
+        )
+    except anthropic.APIConnectionError as exc:
+        raise ValueError(f"Claude analysis request failed (connection error): {exc}") from exc
+    except anthropic.RateLimitError as exc:
+        raise ValueError(f"Claude analysis request failed (rate limit): {exc}") from exc
+    except anthropic.APIStatusError as exc:
+        raise ValueError(f"Claude analysis request failed ({exc.status_code}): {exc.message}") from exc
+
+    for block in response.content:
+        if hasattr(block, "text"):
+            return block.text.strip()
+
+    raise ValueError("Claude did not return a text analysis.")
+
+
 # ───────────────────────────── Main entry point ──────────────────────────────
 
 def parse_chart_query(
@@ -924,13 +1080,30 @@ def parse_chart_query(
         ]
         return _build_clarification_result(normalized_message, analysis, missing_fields or ["metric"])
 
-    # chart or data — build ParsedChartQuery
-    intent = _merge_with_previous_query(analysis, normalized_message, normalized_previous)
-    intent = _apply_explicit_message_overrides(intent, normalized_message)
+    # chart or data — build query object
+    intent_merged = _merge_with_previous_query(analysis, normalized_message, normalized_previous)
+    intent_merged = _apply_explicit_message_overrides(intent_merged, normalized_message)
+
+    if str(analysis.get("intent", "")).strip().lower() == "data":
+        try:
+            data_query = _parse_data_query(
+                intent_merged,
+                message=normalized_message,
+                now_utc=now_utc,
+            )
+        except ChartQueryNeedsClarification as exc:
+            missing_fields = _ordered_unique(
+                exc.missing_fields
+                + _infer_missing_fields(intent_merged, message=normalized_message, now_utc=now_utc)
+            )
+            return _build_clarification_result(normalized_message, analysis, missing_fields or ["metric"])
+        if data_query is not None:
+            return ChartQueryAgentResult(status="data", query=data_query)
+        # unsupported data_type — fall through to chart
 
     try:
         query = _parse_ready_chart_query(
-            intent,
+            intent_merged,
             message=normalized_message,
             now_utc=now_utc,
             previous_query=previous_query,
@@ -938,7 +1111,7 @@ def parse_chart_query(
     except ChartQueryNeedsClarification as exc:
         missing_fields = _ordered_unique(
             exc.missing_fields
-            + _infer_missing_fields(intent, message=normalized_message, now_utc=now_utc)
+            + _infer_missing_fields(intent_merged, message=normalized_message, now_utc=now_utc)
         )
         model_missing = analysis.get("missing_fields")
         if isinstance(model_missing, list):

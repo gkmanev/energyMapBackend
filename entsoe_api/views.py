@@ -13,7 +13,7 @@ from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.decorators import method_decorator
 from django.utils.timezone import get_default_timezone
 from django.views.decorators.cache import cache_page
-from django.db.models import Avg, Max, Q
+from django.db.models import Avg, Count, Max, Min, Q
 from django.db.models.functions import TruncDay, TruncMonth, TruncYear
 from drf_spectacular.utils import OpenApiExample, extend_schema
 from rest_framework.views import APIView
@@ -83,7 +83,13 @@ from .chart_conversation import (
     generate_conversation_id,
     load_chart_conversation,
 )
-from .chart_query import ParsedChartQuery, parse_chart_query
+from .chart_query import (
+    ParsedChartQuery,
+    ParsedDataQuery,
+    build_data_description,
+    call_claude_for_data_analysis,
+    parse_chart_query,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -385,6 +391,80 @@ def _build_price_chart_panel(query: ParsedChartQuery) -> dict:
     }
 
 
+def _fetch_price_data_for_analysis(query: ParsedDataQuery) -> list[dict]:
+    """Daily-aggregated price rows passed to Claude for open-ended analysis."""
+    rows = (
+        CountryPricePoint.objects
+        .filter(
+            country_id__in=query.countries,
+            contract_type="A01",
+            datetime_utc__gte=query.start_utc,
+            datetime_utc__lt=query.end_utc,
+            price__isnull=False,
+        )
+        .annotate(day=TruncDay("datetime_utc"))
+        .values("country_id", "day")
+        .annotate(
+            avg_price=Avg("price"),
+            max_price=Max("price"),
+            min_price=Min("price"),
+            hour_count=Count("price"),
+        )
+        .order_by("country_id", "day")
+    )
+    return [
+        {
+            "country": r["country_id"],
+            "date": r["day"].strftime("%Y-%m-%d"),
+            "avg_eur_mwh": round(float(r["avg_price"]), 2) if r["avg_price"] is not None else None,
+            "max_eur_mwh": round(float(r["max_price"]), 2) if r["max_price"] is not None else None,
+            "min_eur_mwh": round(float(r["min_price"]), 2) if r["min_price"] is not None else None,
+            "hour_count": r["hour_count"],
+        }
+        for r in rows
+    ]
+
+
+def _fetch_generation_data_for_analysis(query: ParsedDataQuery) -> list[dict]:
+    """Daily-aggregated RES generation rows passed to Claude for open-ended analysis."""
+    requested_psr_types = sorted(
+        {pt for s in query.generation_series for pt in CHART_GENERATION_SERIES[s]["psr_types"]}
+    )
+    rows = (
+        CountryResGenerationByType.objects
+        .filter(
+            country_id__in=query.countries,
+            datetime_utc__gte=query.start_utc,
+            datetime_utc__lt=query.end_utc,
+            psr_type__in=requested_psr_types,
+            generation_mw__isnull=False,
+        )
+        .values("country_id", "datetime_utc", "psr_type", "generation_mw")
+        .order_by("country_id", "datetime_utc")
+    )
+    # Sum psr_types per timestamp (same approach as chart panel builder)
+    ts_by_country: dict[str, dict] = defaultdict(lambda: defaultdict(float))
+    for row in rows:
+        ts_by_country[row["country_id"]][row["datetime_utc"]] += float(row["generation_mw"])
+
+    result = []
+    for country_code in query.countries:
+        day_buckets: dict[str, list[float]] = defaultdict(list)
+        for ts, val in ts_by_country.get(country_code, {}).items():
+            day_buckets[ts.strftime("%Y-%m-%d")].append(val)
+        for day in sorted(day_buckets):
+            vals = day_buckets[day]
+            result.append({
+                "country": country_code,
+                "date": day,
+                "avg_mw": round(sum(vals) / len(vals), 2),
+                "max_mw": round(max(vals), 2),
+                "min_mw": round(min(vals), 2),
+                "hour_count": len(vals),
+            })
+    return result
+
+
 def _describe_chart_query(query: ParsedChartQuery) -> str:
     if query.include_prices and query.generation_series:
         metric_text = "generation and prices"
@@ -676,6 +756,42 @@ class ChartQueryView(APIView):
                 {
                     "conversation_id": conversation_id,
                     "status": "text",
+                    "query": None,
+                    "assistant_message": text_answer,
+                    "text_answer": text_answer,
+                    "clarifying_question": None,
+                    "clarification": None,
+                    "panels": [],
+                },
+                status=200,
+            )
+
+        if result.status == "data":
+            data_query = result.query  # ParsedDataQuery
+            _validate_countries_or_400(data_query.countries)
+
+            if data_query.data_type == "prices":
+                data_rows = _fetch_price_data_for_analysis(data_query)
+            else:  # generation_res
+                data_rows = _fetch_generation_data_for_analysis(data_query)
+
+            text_answer = call_claude_for_data_analysis(
+                data_query.original_message,
+                data_rows,
+                data_description=build_data_description(data_query),
+            )
+            append_chart_conversation_turn(
+                conversation_id,
+                user_message=serializer.validated_data["message"],
+                assistant_message=text_answer,
+                status="data",
+                previous_query=previous_query,
+                pending_clarification=None,
+            )
+            return Response(
+                {
+                    "conversation_id": conversation_id,
+                    "status": "data",
                     "query": None,
                     "assistant_message": text_answer,
                     "text_answer": text_answer,

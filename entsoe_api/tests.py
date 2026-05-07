@@ -7,7 +7,7 @@ from django.core.cache import cache
 from django.test import SimpleTestCase, TestCase, override_settings
 
 from entsoe_api.chart_conversation import load_chart_conversation
-from entsoe_api.chart_query import parse_chart_query
+from entsoe_api.chart_query import ParsedDataQuery, parse_chart_query
 from entsoe_api.entsoe_data import EntsoeGenerationForecastByType
 from entsoe_api.helper import save_country_wind_speed_df
 from entsoe_api.management.commands.fetch_generation_eso_bg import (
@@ -412,6 +412,47 @@ class ChartQueryParserTest(SimpleTestCase):
             for item in messages_sent
         ))
         self.assertEqual(messages_sent[-1], {"role": "user", "content": "last month"})
+
+
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
+    def test_parses_data_intent_as_price_stats_query(self, mock_anthropic):
+        mock_anthropic.return_value = _make_client_mock({
+            "intent": "data",
+            "data_type": "prices",
+            "country": "ES",
+            "countries": ["ES"],
+            "resolution": "native",
+            "generation_series": [],
+            "include_prices": True,
+            "chart_type": "line",
+            "timeframe": {
+                "kind": "explicit_utc_range",
+                "amount": None,
+                "start_utc": "2025-04-01T00:00:00Z",
+                "end_utc": "2025-05-01T00:00:00Z",
+            },
+            "text_answer": None,
+            "clarifying_question": None,
+            "missing_fields": [],
+            "country_from": None,
+            "country_to": None,
+        })
+
+        result = parse_chart_query(
+            "What is the average price in ES for April 2025?",
+            now_utc=dt.datetime(2025, 5, 7, 12, 0, tzinfo=dt.timezone.utc),
+        )
+
+        self.assertEqual(result.status, "data")
+        self.assertIsInstance(result.query, ParsedDataQuery)
+        parsed = result.query
+        self.assertEqual(parsed.country, "ES")
+        self.assertEqual(parsed.countries, ["ES"])
+        self.assertEqual(parsed.data_type, "prices")
+        self.assertTrue(parsed.include_prices)
+        self.assertEqual(parsed.start_utc, dt.datetime(2025, 4, 1, 0, 0, tzinfo=dt.timezone.utc))
+        self.assertEqual(parsed.end_utc, dt.datetime(2025, 5, 1, 0, 0, tzinfo=dt.timezone.utc))
 
 
 class FetchGenerationEsoBgHelpersTest(SimpleTestCase):
@@ -924,3 +965,57 @@ class ChartQueryApiTest(TestCase):
         self.assertIsNotNone(conversation)
         self.assertEqual(len(conversation["messages"]), 4)
         self.assertEqual(conversation["previous_query"]["chart_type"], "bar")
+
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
+    @patch("entsoe_api.views._now_utc")
+    def test_chart_query_data_intent_fetches_data_and_calls_claude_for_analysis(self, mock_now_utc, mock_anthropic):
+        mock_now_utc.return_value = dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc)
+
+        # First Anthropic() instance → classification call (tool use)
+        first_client = _make_client_mock({
+            "intent": "data",
+            "data_type": "prices",
+            "country": "BG",
+            "countries": ["BG"],
+            "resolution": "native",
+            "generation_series": [],
+            "include_prices": True,
+            "chart_type": "line",
+            "timeframe": {"kind": "last_n_weeks", "amount": 2, "start_utc": None, "end_utc": None},
+            "text_answer": None,
+            "clarifying_question": None,
+            "missing_fields": [],
+            "country_from": None,
+            "country_to": None,
+        })
+
+        # Second Anthropic() instance → data analysis call (plain text)
+        analysis_text_block = MagicMock()
+        analysis_text_block.type = "text"
+        analysis_text_block.text = "BG: avg 80.00 EUR/MWh, max 100.00, min 60.00 for last 2 weeks (3 data points)."
+        second_client = MagicMock()
+        second_client.messages.create.return_value = MagicMock(content=[analysis_text_block])
+
+        mock_anthropic.side_effect = [first_client, second_client]
+
+        response = self.client.post(
+            "/api/chart-query/",
+            data=json.dumps({
+                "message": "What is the average price in BG for the last two weeks?",
+            }),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["status"], "data")
+        self.assertIsNone(payload["query"])
+        self.assertEqual(payload["panels"], [])
+        self.assertIn("80.00", payload["text_answer"])
+        self.assertIn("EUR/MWh", payload["text_answer"])
+        # Verify the second Claude call received the fetched DB data
+        analysis_call_kwargs = second_client.messages.create.call_args.kwargs
+        user_msg = analysis_call_kwargs["messages"][0]["content"]
+        self.assertIn("BG", user_msg)
+        self.assertIn("EUR/MWh", user_msg)
