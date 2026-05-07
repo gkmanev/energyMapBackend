@@ -23,15 +23,15 @@ def _utc_now_iso() -> str:
 
 
 def _conversation_ttl_seconds() -> int:
-    return int(getattr(settings, "OPENAI_CHART_QUERY_CONVERSATION_TTL", DEFAULT_CONVERSATION_TTL_SECONDS))
+    return int(getattr(settings, "CLAUDE_CHAT_CONVERSATION_TTL", DEFAULT_CONVERSATION_TTL_SECONDS))
 
 
 def _max_messages() -> int:
-    return int(getattr(settings, "OPENAI_CHART_QUERY_MAX_STORED_MESSAGES", DEFAULT_MAX_MESSAGES))
+    return int(getattr(settings, "CLAUDE_CHAT_MAX_STORED_MESSAGES", DEFAULT_MAX_MESSAGES))
 
 
 def _context_messages() -> int:
-    return int(getattr(settings, "OPENAI_CHART_QUERY_MAX_CONTEXT_MESSAGES", DEFAULT_CONTEXT_MESSAGES))
+    return int(getattr(settings, "CLAUDE_CHAT_MAX_CONTEXT_MESSAGES", DEFAULT_CONTEXT_MESSAGES))
 
 
 def generate_conversation_id() -> str:

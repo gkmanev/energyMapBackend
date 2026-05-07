@@ -5,58 +5,100 @@ import json
 import re
 from dataclasses import dataclass, field
 
-import requests
+import anthropic
 from django.conf import settings
 from django.utils.dateparse import parse_date, parse_datetime
 
 
-OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+# ──────────────────────────── Tool definition ────────────────────────────────
 
-INTENT_JSON_SCHEMA = {
-    "name": "chart_query_analysis",
-    "strict": True,
-    "schema": {
+ANALYZE_QUERY_TOOL: dict = {
+    "name": "analyze_energy_query",
+    "description": (
+        "Analyze a user message about European electricity data and return structured "
+        "parameters needed to answer the request — either by querying the database or "
+        "responding directly with text."
+    ),
+    "input_schema": {
         "type": "object",
-        "additionalProperties": False,
         "properties": {
-            "decision": {
+            "intent": {
                 "type": "string",
-                "enum": ["ready", "needs_clarification"],
+                "enum": ["chart", "data", "text", "needs_clarification"],
+                "description": (
+                    "chart: user wants a time-series visualization. "
+                    "data: user wants statistics or aggregated values (max, avg, total…). "
+                    "text: general question answerable without a DB query (capabilities, definitions, country list). "
+                    "needs_clarification: request too vague — metric, country, or timeframe is missing."
+                ),
+            },
+            "text_answer": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "description": "Complete direct answer when intent is 'text'.",
             },
             "clarifying_question": {
-                "anyOf": [
-                    {"type": "string"},
-                    {"type": "null"},
-                ]
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "description": "One concise question when intent is 'needs_clarification'.",
             },
             "missing_fields": {
                 "type": "array",
-                "items": {
-                    "type": "string",
-                    "enum": ["metric", "country", "timeframe"],
-                },
+                "items": {"type": "string", "enum": ["metric", "country", "timeframe"]},
+                "description": "Fields missing for a complete chart/data query.",
             },
-            "country": {"type": "string"},
+            "data_type": {
+                "anyOf": [
+                    {
+                        "type": "string",
+                        "enum": ["generation_res", "generation", "prices", "capacity", "flows"],
+                    },
+                    {"type": "null"},
+                ],
+                "description": (
+                    "generation_res: RES (solar+wind) actual generation from A69. "
+                    "generation: all production types actual generation from A75. "
+                    "prices: day-ahead electricity prices EUR/MWh from A44. "
+                    "capacity: installed generation capacity snapshots from A68. "
+                    "flows: cross-border physical power flows from A11."
+                ),
+            },
+            "country": {
+                "type": "string",
+                "description": "Primary 2-letter ISO country code (first in the list).",
+            },
             "countries": {
                 "type": "array",
                 "items": {"type": "string"},
+                "description": "All requested 2-letter ISO country codes in the order mentioned.",
+            },
+            "country_from": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "description": "Source country ISO code for flows queries.",
+            },
+            "country_to": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "description": "Destination country ISO code for flows queries.",
             },
             "resolution": {
                 "type": "string",
                 "enum": ["native", "d", "m", "y"],
+                "description": "Aggregation: native = raw/hourly, d = daily, m = monthly, y = yearly.",
             },
             "generation_series": {
                 "type": "array",
                 "items": {"type": "string", "enum": ["res", "solar", "wind"]},
+                "description": "Generation series to include. res = solar+wind combined.",
             },
-            "include_prices": {"type": "boolean"},
+            "include_prices": {
+                "type": "boolean",
+                "description": "Whether to include day-ahead prices alongside generation.",
+            },
             "chart_type": {
                 "type": "string",
                 "enum": ["line", "bar"],
+                "description": "Visualization type — line or bar chart.",
             },
             "timeframe": {
                 "type": "object",
-                "additionalProperties": False,
                 "properties": {
                     "kind": {
                         "type": "string",
@@ -73,30 +115,24 @@ INTENT_JSON_SCHEMA = {
                         "anyOf": [
                             {"type": "integer", "minimum": 1},
                             {"type": "null"},
-                        ]
+                        ],
                     },
-                    "start_utc": {
-                        "anyOf": [
-                            {"type": "string"},
-                            {"type": "null"},
-                        ]
-                    },
-                    "end_utc": {
-                        "anyOf": [
-                            {"type": "string"},
-                            {"type": "null"},
-                        ]
-                    },
+                    "start_utc": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "end_utc": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["kind", "amount", "start_utc", "end_utc"],
             },
         },
         "required": [
-            "decision",
+            "intent",
+            "text_answer",
             "clarifying_question",
             "missing_fields",
+            "data_type",
             "country",
             "countries",
+            "country_from",
+            "country_to",
             "resolution",
             "generation_series",
             "include_prices",
@@ -106,40 +142,80 @@ INTENT_JSON_SCHEMA = {
     },
 }
 
-SYSTEM_PROMPT = """You analyze user chart requests for a chart-query API and return strict JSON.
 
-Rules:
-- Return only data matching the provided JSON schema.
-- First decide whether the request has enough information to prepare a database query and chart-ready JSON.
-- Use decision=ready only when the request can be resolved into:
-  - at least one supported metric,
-  - at least one country,
-  - and a usable timeframe.
-- Use decision=needs_clarification when the request is ambiguous, underspecified, or asks only for a follow-up style change without enough previous context.
-- When decision=needs_clarification, write one concise clarifying_question that asks only for the missing information. Mention supported metrics when relevant.
-- missing_fields may only contain metric, country, timeframe.
-- Supported generation series are only: res, solar, wind.
-- Map requests for "RES", "renewables", or "renewable generation" to res unless the user explicitly asks for specific types.
-- In this API, res means the available A69 renewable set: solar + wind.
-- Supported non-generation metric is prices, mapped to include_prices=true.
-- Supported chart types are line and bar.
-- Countries must be 2-letter ISO codes.
-- Always fill countries as an array in the same order as the request.
-- If country is included, set it to the first requested country for compatibility.
-- Resolution must be one of:
-  - native: no aggregation requested
-  - d: daily
-  - m: monthly
-  - y: yearly
-- For "last two weeks" style requests, return timeframe.kind=last_n_weeks and amount=2.
-- For explicit UTC ranges, use timeframe.kind=explicit_utc_range and fill start_utc/end_utc.
-- If the timeframe is unclear or absent, use timeframe.kind=unknown.
-- If the request asks for unsupported metrics, omit them rather than inventing new ones.
-- If the user asks for a bar or line chart, set chart_type accordingly. Otherwise use line.
-- If no supported metric is requested, return empty generation_series and include_prices=false and prefer decision=needs_clarification.
-- Missing chart type or missing resolution alone should not force clarification.
-"""
+# ──────────────────────────── System prompt ──────────────────────────────────
 
+SYSTEM_PROMPT = """You are an energy data assistant for visualize.energy, a European electricity market data platform.
+
+## Available datasets
+
+- **generation_res** – Actual RES (renewable energy sources) generation per country from the ENTSO-E A69 dataset.
+  Supported generation_series: "res" (solar + wind combined), "solar" (B16), "wind" (B18/B19).
+- **generation** – Actual generation by all production types from the A75 dataset.
+- **prices** – Day-ahead electricity prices in EUR/MWh from the A44 dataset.
+- **capacity** – Annual installed generation capacity snapshots by production type from the A68 dataset.
+- **flows** – Cross-border physical power flows between country pairs from the A11 dataset.
+
+## Supported countries
+European countries identified by 2-letter ISO codes:
+AT, BE, BG, CH, CZ, DE, DK, EE, ES, FI, FR, GB, GR, HR, HU, IE, IT,
+LT, LU, LV, ME, MK, MT, NL, NO, PL, PT, RO, RS, SE, SI, SK, TR, UA, XK, GE and others.
+
+## Intent classification
+
+**chart** – User wants a time-series chart. Extract: data_type, countries, timeframe, resolution, generation_series / include_prices, chart_type.
+**data** – User wants statistics or aggregates (max price, average generation, total flows, etc.). Extract the same parameters as for chart.
+**text** – User asks a general question you can answer without hitting the database:
+  - "What data do you have?" → describe available datasets
+  - "Which countries are supported?" → list key European countries
+  - "What is RES?" → explain renewable energy sources
+  - "How fresh is the data?" → describe update frequency (hourly/daily)
+  Set text_answer to a helpful, concise response.
+**needs_clarification** – The request is missing metric, country, or timeframe. Ask for the most critical piece only.
+
+## Mapping rules
+
+- "renewables", "RES", "renewable generation/energy" → generation_series: ["res"], data_type: generation_res
+- "solar" → generation_series: ["solar"], data_type: generation_res
+- "wind" → generation_series: ["wind"], data_type: generation_res
+- "prices", "electricity price", "spot price", "day-ahead" → include_prices: true, data_type: prices
+- User can request generation AND prices simultaneously → fill generation_series AND set include_prices: true
+- "flows", "cross-border", "import from X to Y", "export from X to Y" → data_type: flows, fill country_from and country_to
+- "capacity", "installed capacity" → data_type: capacity
+
+## Timeframe rules
+
+- "today" → kind: today
+- "yesterday" → kind: yesterday
+- "last N days" → kind: last_n_days, amount: N
+- "last N weeks" → kind: last_n_weeks, amount: N
+- Specific date, month name ("April 2025"), or ISO range → kind: explicit_utc_range, fill start_utc and end_utc
+- Unknown or missing → kind: unknown → prefer needs_clarification
+
+## Resolution rules
+
+- Not specified and range > 28 days → use "d" (daily)
+- Not specified and range ≤ 28 days → use "native"
+- "hourly", "raw", "native" → native
+- "daily" / "day by day" → d
+- "monthly" → m
+- "yearly" / "annual" → y
+
+## Missing fields
+
+- generation_series is empty AND include_prices is false AND data_type is null → add "metric" to missing_fields
+- countries is empty → add "country" to missing_fields
+- timeframe kind is "unknown" → add "timeframe" to missing_fields
+
+## Follow-up handling
+
+If the user's message is only a chart-style change (e.g. "make it a bar chart", "switch to line") without prior context,
+return intent: needs_clarification with a question asking what data they want to see.
+
+Always call analyze_energy_query with all required fields. Set unused fields to null or empty arrays."""
+
+
+# ────────────────────────────── Dataclasses ──────────────────────────────────
 
 @dataclass(frozen=True)
 class ParsedChartQuery:
@@ -164,16 +240,19 @@ class ChartQueryClarification:
 
 @dataclass(frozen=True)
 class ChartQueryAgentResult:
-    status: str
+    status: str  # "ready" | "needs_clarification" | "text"
     query: ParsedChartQuery | None = None
     clarification: ChartQueryClarification | None = None
+    text_answer: str | None = None
 
 
 class ChartQueryNeedsClarification(ValueError):
     def __init__(self, missing_fields: list[str], message: str = "The request needs clarification."):
         super().__init__(message)
-        self.missing_fields = _ordered_unique([field for field in missing_fields if field])
+        self.missing_fields = _ordered_unique([f for f in missing_fields if f])
 
+
+# ─────────────────────────── Utility helpers ─────────────────────────────────
 
 def _ensure_utc(value: dt.datetime) -> dt.datetime:
     if value.tzinfo is None:
@@ -211,7 +290,25 @@ def _message_implies_res_generation(message: str) -> bool:
 
 def _message_mentions_supported_metric(message: str) -> bool:
     lowered = message.lower()
-    return bool(re.search(r"\bprice(?:s)?\b|\bres\b|\brenewable(?:s)?\b|\bsolar\b|\bwind\b", lowered))
+    return bool(
+        re.search(
+            r"\bprice(?:s)?\b|\bres\b|\brenewable(?:s)?\b|\bsolar\b|\bwind\b"
+            r"|\bgeneration\b|\bcapacity\b|\bflow(?:s)?\b",
+            lowered,
+        )
+    )
+
+
+def _message_mentions_timeframe(message: str) -> bool:
+    lowered = message.lower()
+    return bool(
+        re.search(
+            r"\b(today|yesterday|last|week|weeks|month|months|year|years"
+            r"|from|to|between|daily|monthly|yearly|annual)\b",
+            lowered,
+        )
+        or re.search(r"\d{4}-\d{2}-\d{2}", lowered)
+    )
 
 
 def _message_mentions_resolution(message: str) -> bool:
@@ -233,17 +330,6 @@ def _extract_chart_type(message: str) -> str | None:
     return None
 
 
-def _message_mentions_timeframe(message: str) -> bool:
-    lowered = message.lower()
-    return bool(
-        re.search(
-            r"\b(today|yesterday|last|week|weeks|month|months|year|years|from|to|between|daily|monthly|yearly|annual)\b",
-            lowered,
-        )
-        or re.search(r"\d{4}-\d{2}-\d{2}", lowered)
-    )
-
-
 def _looks_like_visualization_follow_up(message: str) -> bool:
     return (
         _extract_chart_type(message) is not None
@@ -262,7 +348,6 @@ def _configured_country_codes() -> set[str]:
                 for code in raw_mapping.keys()
                 if len(str(code).strip()) == 2
             )
-
     raw_coords = getattr(settings, "COUNTRY_COORDS", None) or []
     if isinstance(raw_coords, list):
         codes.update(
@@ -270,7 +355,6 @@ def _configured_country_codes() -> set[str]:
             for item in raw_coords
             if isinstance(item, dict) and len(str(item.get("code", "")).strip()) == 2
         )
-
     return {code for code in codes if code.isalpha()}
 
 
@@ -306,11 +390,9 @@ def _extract_metrics_from_message(message: str) -> tuple[list[str], bool] | None
         match = re.search(pattern, lowered)
         if match:
             series_matches.append((match.start(), series_key))
-
     generation_series = [series_key for _, series_key in sorted(series_matches)]
     if not generation_series and _message_implies_res_generation(message):
         generation_series = ["res"]
-
     if generation_series or include_prices:
         return generation_series, include_prices
     return None
@@ -333,41 +415,27 @@ def _extract_calendar_month_window(
 
     month_token = month_match.group(1).lower()
     month_number = {
-        "jan": 1,
-        "january": 1,
-        "feb": 2,
-        "february": 2,
-        "mar": 3,
-        "march": 3,
-        "apr": 4,
-        "april": 4,
-        "may": 5,
-        "jun": 6,
-        "june": 6,
-        "jul": 7,
-        "july": 7,
-        "aug": 8,
-        "august": 8,
-        "sep": 9,
-        "sept": 9,
-        "september": 9,
-        "oct": 10,
-        "october": 10,
-        "nov": 11,
-        "november": 11,
-        "dec": 12,
-        "december": 12,
+        "jan": 1, "january": 1, "feb": 2, "february": 2,
+        "mar": 3, "march": 3, "apr": 4, "april": 4,
+        "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+        "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9,
+        "oct": 10, "october": 10, "nov": 11, "november": 11,
+        "dec": 12, "december": 12,
     }[month_token]
 
     today_utc = _ensure_utc(now_utc).replace(hour=0, minute=0, second=0, microsecond=0)
     year = int(month_match.group(2)) if month_match.group(2) else today_utc.year
     start_utc = dt.datetime(year, month_number, 1, tzinfo=dt.timezone.utc)
-    if month_number == 12:
-        next_month_start = dt.datetime(year + 1, 1, 1, tzinfo=dt.timezone.utc)
-    else:
-        next_month_start = dt.datetime(year, month_number + 1, 1, tzinfo=dt.timezone.utc)
-
-    end_utc = min(next_month_start, today_utc) if year == today_utc.year and month_number == today_utc.month else next_month_start
+    next_month_start = (
+        dt.datetime(year + 1, 1, 1, tzinfo=dt.timezone.utc)
+        if month_number == 12
+        else dt.datetime(year, month_number + 1, 1, tzinfo=dt.timezone.utc)
+    )
+    end_utc = (
+        min(next_month_start, today_utc)
+        if year == today_utc.year and month_number == today_utc.month
+        else next_month_start
+    )
     if start_utc >= end_utc:
         return None
 
@@ -387,127 +455,89 @@ def _infer_default_resolution(
         return requested_resolution
     if _message_mentions_resolution(message):
         return requested_resolution
-
-    window = end_utc - start_utc
-    if window >= dt.timedelta(days=28):
+    if end_utc - start_utc >= dt.timedelta(days=28):
         return "d"
     return requested_resolution
 
 
-def _extract_output_text(response_json: dict) -> str:
-    output_text = response_json.get("output_text")
-    if isinstance(output_text, str) and output_text.strip():
-        return output_text
-
-    for item in response_json.get("output", []):
-        if item.get("type") != "message":
-            continue
-        for content_item in item.get("content", []):
-            text_value = content_item.get("text")
-            if isinstance(text_value, str) and text_value.strip():
-                return text_value
-
-    raise ValueError("OpenAI response did not contain structured output text.")
+def _format_utc_z(value: dt.datetime) -> str:
+    return _ensure_utc(value).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _call_openai_for_intent(
+# ────────────────────────── Claude API call ──────────────────────────────────
+
+def _call_claude_for_intent(
     message: str,
     *,
     previous_query: dict | None = None,
     conversation_messages: list[dict[str, str]] | None = None,
     pending_clarification: dict | None = None,
 ) -> dict:
-    api_key = getattr(settings, "OPENAI_API_KEY", "") or ""
+    api_key = getattr(settings, "ANTHROPIC_API_KEY", "") or ""
     if not api_key:
-        raise ValueError("OPENAI_API_KEY is not configured.")
+        raise ValueError("ANTHROPIC_API_KEY is not configured.")
 
-    model = getattr(settings, "OPENAI_CHART_QUERY_MODEL", "gpt-4o-mini")
-    timeout_seconds = getattr(settings, "OPENAI_CHART_QUERY_TIMEOUT", 30)
+    model = getattr(settings, "CLAUDE_CHAT_MODEL", "claude-sonnet-4-6")
+    timeout_seconds = float(getattr(settings, "CLAUDE_CHAT_TIMEOUT", 30))
 
-    input_items = [{"role": "system", "content": SYSTEM_PROMPT}]
+    # Build system prompt additions for stateful context
+    system_parts = [SYSTEM_PROMPT]
     if previous_query:
-        input_items.append(
-            {
-                "role": "system",
-                "content": (
-                    "Previous chart query context is provided as JSON below. "
-                    "If the latest user message is a follow-up such as a chart-style change, "
-                    "reuse the previous metric, countries, resolution, and timeframe unless the user explicitly changes them.\n"
-                    f"{json.dumps(previous_query, sort_keys=True)}"
-                ),
-            }
+        system_parts.append(
+            "PREVIOUS QUERY CONTEXT — reuse metric, countries, timeframe, and resolution "
+            "unless the user explicitly changes them:\n"
+            + json.dumps(previous_query, sort_keys=True, default=str)
         )
     if pending_clarification:
-        input_items.append(
-            {
-                "role": "system",
-                "content": (
-                    "The previous assistant turn asked the user for clarification. "
-                    "Use the latest user message primarily as an answer to that question when possible.\n"
-                    f"{json.dumps(pending_clarification, sort_keys=True)}"
-                ),
-            }
+        system_parts.append(
+            "PENDING CLARIFICATION — you previously asked the user a question. "
+            "Treat their next message primarily as the answer:\n"
+            + json.dumps(pending_clarification, sort_keys=True)
         )
+    full_system = "\n\n".join(system_parts)
+
+    # Build message list from conversation history
+    messages: list[dict] = []
     if conversation_messages:
-        input_items.append(
-            {
-                "role": "system",
-                "content": "Recent conversation history follows. Use it as context, but prioritize the latest user message for explicit changes.",
-            }
-        )
-        for conversation_message in conversation_messages:
-            role = str(conversation_message.get("role", "")).strip().lower()
-            content = str(conversation_message.get("content", "")).strip()
+        for msg in conversation_messages:
+            role = str(msg.get("role", "")).strip().lower()
+            content = str(msg.get("content", "")).strip()
             if role in {"user", "assistant"} and content:
-                input_items.append({"role": role, "content": content})
-    input_items.append({"role": "user", "content": message})
+                messages.append({"role": role, "content": content})
+        # Anthropic requires messages to start with "user" and not end with "user"
+        # before appending the new user turn — trim trailing user messages
+        while messages and messages[0]["role"] == "assistant":
+            messages.pop(0)
+        while messages and messages[-1]["role"] == "user":
+            messages.pop()
 
-    payload = {
-        "model": model,
-        "input": input_items,
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": INTENT_JSON_SCHEMA["name"],
-                "strict": INTENT_JSON_SCHEMA["strict"],
-                "schema": INTENT_JSON_SCHEMA["schema"],
-            }
-        },
-    }
+    messages.append({"role": "user", "content": message})
 
+    client = anthropic.Anthropic(api_key=api_key, timeout=timeout_seconds)
     try:
-        response = requests.post(
-            OPENAI_RESPONSES_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=timeout_seconds,
+        response = client.messages.create(
+            model=model,
+            max_tokens=1024,
+            system=full_system,
+            messages=messages,
+            tools=[ANALYZE_QUERY_TOOL],
+            tool_choice={"type": "tool", "name": "analyze_energy_query"},
         )
-        response.raise_for_status()
-    except requests.HTTPError as exc:
-        response_body = ""
-        if exc.response is not None:
-            try:
-                response_body = exc.response.text.strip()
-            except Exception:
-                response_body = ""
-        suffix = f" Response body: {response_body}" if response_body else ""
-        raise ValueError(f"OpenAI request failed: {exc}.{suffix}") from exc
-    except requests.RequestException as exc:
-        raise ValueError(f"OpenAI request failed: {exc}") from exc
+    except anthropic.APIConnectionError as exc:
+        raise ValueError(f"Claude request failed (connection error): {exc}") from exc
+    except anthropic.RateLimitError as exc:
+        raise ValueError(f"Claude request failed (rate limit): {exc}") from exc
+    except anthropic.APIStatusError as exc:
+        raise ValueError(f"Claude request failed ({exc.status_code}): {exc.message}") from exc
 
-    response_json = response.json()
-    if response_json.get("status") == "incomplete":
-        raise ValueError("OpenAI response was incomplete.")
+    for block in response.content:
+        if block.type == "tool_use" and block.name == "analyze_energy_query":
+            return block.input
 
-    return json.loads(_extract_output_text(response_json))
+    raise ValueError("Claude did not return a structured analysis.")
 
 
-def _format_utc_z(value: dt.datetime) -> str:
-    return _ensure_utc(value).strftime("%Y-%m-%dT%H:%M:%SZ")
-
+# ──────────────────────── Query normalization helpers ────────────────────────
 
 def _normalize_previous_query(previous_query: dict | None) -> dict | None:
     if not isinstance(previous_query, dict):
@@ -584,6 +614,7 @@ def _merge_with_previous_query(intent: dict, message: str, previous_query: dict 
 
     if _looks_like_visualization_follow_up(message):
         return {
+            "intent": merged_intent.get("intent", "chart"),
             "country": normalized_previous["country"],
             "countries": normalized_previous["countries"],
             "resolution": normalized_previous["resolution"] or "native",
@@ -643,20 +674,23 @@ def _compute_window_from_intent(timeframe: dict, now_utc: dt.datetime) -> tuple[
 def _fallback_clarifying_question(missing_fields: list[str]) -> str:
     missing = set(missing_fields)
     if missing == {"metric"}:
-        return "Which metric do you want to chart: RES generation, solar, wind, or day-ahead prices?"
+        return (
+            "Which data would you like to see? Options: RES generation, solar, wind, "
+            "day-ahead prices, installed capacity, or cross-border flows."
+        )
     if missing == {"country"}:
-        return "Which country should I use for the chart?"
+        return "Which country (or countries) should I use?"
     if missing == {"timeframe"}:
-        return "What time range should I use for the chart?"
+        return "What time range should I use? For example: 'last 7 days', 'April 2025', or 'from 2025-01-01 to 2025-03-31'."
     if missing == {"metric", "country"}:
-        return "Which metric do you want to chart, and for which country?"
+        return "Which data and for which country would you like to see?"
     if missing == {"metric", "timeframe"}:
-        return "Which metric do you want to chart, and what time range should I use?"
+        return "Which data would you like and for what time range?"
     if missing == {"country", "timeframe"}:
-        return "Which country and what time range should I use for the chart?"
+        return "Which country and what time range should I use?"
     return (
-        "Which metric do you want to chart, for which country, and for what time range? "
-        "Supported metrics are RES generation, solar, wind, and day-ahead prices."
+        "Could you be more specific? For example: "
+        "'RES generation for DE for the last 7 days' or 'day-ahead prices for FR in April 2025'."
     )
 
 
@@ -665,43 +699,46 @@ def _build_clarification_result(
     analysis: dict,
     missing_fields: list[str],
 ) -> ChartQueryAgentResult:
-    normalized_missing_fields = _ordered_unique(
+    normalized_missing = _ordered_unique(
         [
-            str(field).strip().lower()
-            for field in missing_fields
-            if str(field).strip().lower() in {"metric", "country", "timeframe"}
+            str(f).strip().lower()
+            for f in missing_fields
+            if str(f).strip().lower() in {"metric", "country", "timeframe"}
         ]
     )
-    question = str(analysis.get("clarifying_question") or "").strip() or _fallback_clarifying_question(normalized_missing_fields)
+    question = (
+        str(analysis.get("clarifying_question") or "").strip()
+        or _fallback_clarifying_question(normalized_missing)
+    )
     return ChartQueryAgentResult(
         status="needs_clarification",
         clarification=ChartQueryClarification(
             original_message=message,
             question=question,
-            missing_fields=normalized_missing_fields,
+            missing_fields=normalized_missing,
         ),
     )
 
 
 def _apply_explicit_message_overrides(intent: dict, message: str) -> dict:
-    overridden_intent = dict(intent)
+    overridden = dict(intent)
 
     explicit_countries = _extract_countries_from_message(message)
     if explicit_countries:
-        overridden_intent["countries"] = explicit_countries
-        overridden_intent["country"] = explicit_countries[0]
+        overridden["countries"] = explicit_countries
+        overridden["country"] = explicit_countries[0]
 
     explicit_resolution = _extract_resolution_from_message(message)
     if explicit_resolution is not None:
-        overridden_intent["resolution"] = explicit_resolution or "native"
+        overridden["resolution"] = explicit_resolution or "native"
 
     explicit_metrics = _extract_metrics_from_message(message)
     if explicit_metrics is not None:
-        generation_series_override, include_prices_override = explicit_metrics
-        overridden_intent["generation_series"] = generation_series_override
-        overridden_intent["include_prices"] = include_prices_override
+        gen_series, incl_prices = explicit_metrics
+        overridden["generation_series"] = gen_series
+        overridden["include_prices"] = incl_prices
 
-    return overridden_intent
+    return overridden
 
 
 def _infer_missing_fields(intent: dict, *, message: str, now_utc: dt.datetime) -> list[str]:
@@ -710,14 +747,10 @@ def _infer_missing_fields(intent: dict, *, message: str, now_utc: dt.datetime) -
     raw_countries = intent.get("countries")
     countries: list[str] = []
     if isinstance(raw_countries, list):
-        countries = [
-            str(item).strip().upper()
-            for item in raw_countries
-            if str(item).strip()
-        ]
-    compatibility_country = str(intent.get("country", "")).strip().upper()
-    if not countries and compatibility_country:
-        countries = [compatibility_country]
+        countries = [str(item).strip().upper() for item in raw_countries if str(item).strip()]
+    compat_country = str(intent.get("country", "")).strip().upper()
+    if not countries and compat_country:
+        countries = [compat_country]
     if not countries:
         missing_fields.append("country")
 
@@ -760,39 +793,31 @@ def _parse_ready_chart_query(
     countries: list[str] = []
     if isinstance(raw_countries, list):
         countries = _ordered_unique(
-            [
-                str(item).strip().upper()
-                for item in raw_countries
-                if str(item).strip()
-            ]
+            [str(item).strip().upper() for item in raw_countries if str(item).strip()]
         )
 
-    compatibility_country = str(intent.get("country", "")).strip().upper()
-    if not countries and compatibility_country:
-        countries = [compatibility_country]
+    compat_country = str(intent.get("country", "")).strip().upper()
+    if not countries and compat_country:
+        countries = [compat_country]
 
     if not countries:
         raise ChartQueryNeedsClarification(["country"])
-    if any(len(country_code) != 2 or not country_code.isalpha() for country_code in countries):
-        raise ValueError("The model did not return valid 2-letter country codes.")
+    if any(len(c) != 2 or not c.isalpha() for c in countries):
+        raise ValueError("Claude returned invalid country codes.")
 
-    country = compatibility_country if compatibility_country in countries else countries[0]
+    country = compat_country if compat_country in countries else countries[0]
 
     resolution = intent.get("resolution", "native")
     if resolution == "native":
         resolution = ""
     if resolution not in {"", "d", "m", "y"}:
-        raise ValueError("The model returned an unsupported resolution.")
+        raise ValueError("Claude returned an unsupported resolution.")
 
     generation_series = _ordered_unique(
-        [
-            str(item).strip().lower()
-            for item in intent.get("generation_series", [])
-            if str(item).strip()
-        ]
+        [str(item).strip().lower() for item in intent.get("generation_series", []) if str(item).strip()]
     )
     if any(item not in {"res", "solar", "wind"} for item in generation_series):
-        raise ValueError("The model returned unsupported generation series.")
+        raise ValueError("Claude returned unsupported generation series.")
 
     include_prices = bool(intent.get("include_prices", False))
     if not generation_series and _message_implies_res_generation(message):
@@ -812,27 +837,18 @@ def _parse_ready_chart_query(
         if not isinstance(timeframe, dict):
             raise ChartQueryNeedsClarification(["timeframe"])
         start_utc, end_utc, time_phrase = _compute_window_from_intent(timeframe, now_utc)
+
     if start_utc >= end_utc:
-        raise ValueError("The parsed start time must be earlier than end time.")
+        raise ValueError("Parsed start time must be earlier than end time.")
 
-    resolution = _infer_default_resolution(
-        resolution,
-        message,
-        start_utc,
-        end_utc,
-    )
+    resolution = _infer_default_resolution(resolution, message, start_utc, end_utc)
 
-    resolution_label = {
-        "": "native",
-        "d": "daily",
-        "m": "monthly",
-        "y": "yearly",
-    }[resolution]
+    resolution_label = {"": "native", "d": "daily", "m": "monthly", "y": "yearly"}[resolution]
     time_phrase_override = None
     if _looks_like_visualization_follow_up(message) and isinstance(previous_query, dict):
-        raw_time_phrase = previous_query.get("time_phrase")
-        if isinstance(raw_time_phrase, str) and raw_time_phrase.strip():
-            time_phrase_override = raw_time_phrase.strip()
+        raw_phrase = previous_query.get("time_phrase")
+        if isinstance(raw_phrase, str) and raw_phrase.strip():
+            time_phrase_override = raw_phrase.strip()
 
     return ParsedChartQuery(
         original_message=message,
@@ -841,12 +857,16 @@ def _parse_ready_chart_query(
         start_utc=start_utc,
         end_utc=end_utc,
         resolution=resolution,
-        time_phrase=time_phrase_override or (f"{time_phrase} at {resolution_label} resolution" if resolution else time_phrase),
+        time_phrase=time_phrase_override or (
+            f"{time_phrase} at {resolution_label} resolution" if resolution else time_phrase
+        ),
         generation_series=generation_series,
         include_prices=include_prices,
         chart_type=chart_type,
     )
 
+
+# ───────────────────────────── Main entry point ──────────────────────────────
 
 def parse_chart_query(
     message: str,
@@ -861,27 +881,50 @@ def parse_chart_query(
         raise ValueError("message is required.")
 
     normalized_previous = _normalize_previous_query(previous_query)
-    analysis = _call_openai_for_intent(
+
+    analysis = _call_claude_for_intent(
         normalized_message,
         previous_query=previous_query,
         conversation_messages=conversation_messages,
         pending_clarification=pending_clarification,
     )
 
+    # Direct text answer — no DB query needed
+    if analysis.get("intent") == "text":
+        text_answer = str(analysis.get("text_answer") or "").strip()
+        if not text_answer:
+            text_answer = (
+                "I can help you explore European electricity data including RES generation, "
+                "solar, wind, day-ahead prices, installed capacity, and cross-border flows. "
+                "Try asking: 'Show RES generation for DE for the last 7 days'."
+            )
+        return ChartQueryAgentResult(status="text", text_answer=text_answer)
+
+    # Visualization-only follow-up with no prior context
     if _looks_like_visualization_follow_up(normalized_message) and normalized_previous is None:
         missing_fields = ["metric", "country", "timeframe"]
-        model_missing_fields = analysis.get("missing_fields")
-        if isinstance(model_missing_fields, list):
+        model_missing = analysis.get("missing_fields")
+        if isinstance(model_missing, list):
             missing_fields = _ordered_unique(
                 missing_fields
                 + [
-                    str(field).strip().lower()
-                    for field in model_missing_fields
-                    if str(field).strip().lower() in {"metric", "country", "timeframe"}
+                    str(f).strip().lower()
+                    for f in model_missing
+                    if str(f).strip().lower() in {"metric", "country", "timeframe"}
                 ]
             )
         return _build_clarification_result(normalized_message, analysis, missing_fields)
 
+    # Explicit clarification from Claude
+    if analysis.get("intent") == "needs_clarification":
+        missing_fields = [
+            str(f).strip().lower()
+            for f in (analysis.get("missing_fields") or [])
+            if str(f).strip().lower() in {"metric", "country", "timeframe"}
+        ]
+        return _build_clarification_result(normalized_message, analysis, missing_fields or ["metric"])
+
+    # chart or data — build ParsedChartQuery
     intent = _merge_with_previous_query(analysis, normalized_message, normalized_previous)
     intent = _apply_explicit_message_overrides(intent, normalized_message)
 
@@ -897,14 +940,14 @@ def parse_chart_query(
             exc.missing_fields
             + _infer_missing_fields(intent, message=normalized_message, now_utc=now_utc)
         )
-        model_missing_fields = analysis.get("missing_fields")
-        if isinstance(model_missing_fields, list):
+        model_missing = analysis.get("missing_fields")
+        if isinstance(model_missing, list):
             missing_fields = _ordered_unique(
                 missing_fields
                 + [
-                    str(field).strip().lower()
-                    for field in model_missing_fields
-                    if str(field).strip().lower() in {"metric", "country", "timeframe"}
+                    str(f).strip().lower()
+                    for f in model_missing
+                    if str(f).strip().lower() in {"metric", "country", "timeframe"}
                 ]
             )
         return _build_clarification_result(normalized_message, analysis, missing_fields)

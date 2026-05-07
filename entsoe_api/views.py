@@ -662,6 +662,30 @@ class ChartQueryView(APIView):
         except ValueError as e:
             return Response({"detail": str(e)}, status=400)
 
+        if result.status == "text":
+            text_answer = result.text_answer or ""
+            append_chart_conversation_turn(
+                conversation_id,
+                user_message=serializer.validated_data["message"],
+                assistant_message=text_answer,
+                status="text",
+                previous_query=previous_query,
+                pending_clarification=None,
+            )
+            return Response(
+                {
+                    "conversation_id": conversation_id,
+                    "status": "text",
+                    "query": None,
+                    "assistant_message": text_answer,
+                    "text_answer": text_answer,
+                    "clarifying_question": None,
+                    "clarification": None,
+                    "panels": [],
+                },
+                status=200,
+            )
+
         if result.status == "needs_clarification":
             clarification = result.clarification
             append_chart_conversation_turn(
@@ -694,7 +718,7 @@ class ChartQueryView(APIView):
 
         query = result.query
         if query is None:
-            return Response({"detail": "Chart query result did not include a parsed query."}, status=400)
+            return Response({"detail": "Chat query result did not include a parsed query."}, status=400)
 
         _validate_countries_or_400(query.countries)
 

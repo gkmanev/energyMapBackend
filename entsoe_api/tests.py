@@ -1,6 +1,6 @@
 import datetime as dt
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 from django.core.cache import cache
@@ -23,15 +23,22 @@ from entsoe_api.models import Country, CountryPricePoint, CountryResGenerationBy
 from entsoe_api.views import _parse_iso_utc_floor_hour, _partition_country_codes
 
 
-class MockOpenAIResponse:
-    def __init__(self, payload):
-        self._payload = payload
+def _make_response(input_data: dict) -> MagicMock:
+    """Build the mock object returned by client.messages.create (tool_use block)."""
+    tool_block = MagicMock()
+    tool_block.type = "tool_use"
+    tool_block.name = "analyze_energy_query"
+    tool_block.input = input_data
+    response = MagicMock()
+    response.content = [tool_block]
+    return response
 
-    def raise_for_status(self):
-        return None
 
-    def json(self):
-        return self._payload
+def _make_client_mock(input_data: dict) -> MagicMock:
+    """Build a mock Anthropic client that returns the given tool input on messages.create."""
+    client = MagicMock()
+    client.messages.create.return_value = _make_response(input_data)
+    return client
 
 
 class GenerationForecastHelpersTest(SimpleTestCase):
@@ -88,29 +95,19 @@ class PartitionCountryCodesTest(SimpleTestCase):
 
 
 class ChartQueryParserTest(SimpleTestCase):
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
-    def test_parses_multi_metric_daily_query(self, mock_post):
-        mock_post.return_value = MockOpenAIResponse(
-            {
-                "status": "completed",
-                "output_text": json.dumps(
-                    {
-                        "country": "BG",
-                        "countries": ["BG"],
-                        "resolution": "d",
-                        "generation_series": ["wind", "solar"],
-                        "include_prices": True,
-                        "timeframe": {
-                            "kind": "last_n_weeks",
-                            "amount": 2,
-                            "start_utc": None,
-                            "end_utc": None,
-                        },
-                    }
-                ),
-            }
-        )
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
+    def test_parses_multi_metric_daily_query(self, mock_anthropic):
+        mock_client = _make_client_mock({
+            "intent": "chart",
+            "country": "BG",
+            "countries": ["BG"],
+            "resolution": "d",
+            "generation_series": ["wind", "solar"],
+            "include_prices": True,
+            "timeframe": {"kind": "last_n_weeks", "amount": 2, "start_utc": None, "end_utc": None},
+        })
+        mock_anthropic.return_value = mock_client
 
         result = parse_chart_query(
             "Show the wind and solar generation for BG for the last two weeks daily resolution as well as the prices",
@@ -127,31 +124,21 @@ class ChartQueryParserTest(SimpleTestCase):
         self.assertTrue(parsed.include_prices)
         self.assertEqual(parsed.start_utc, dt.datetime(2026, 4, 15, 0, 0, tzinfo=dt.timezone.utc))
         self.assertEqual(parsed.end_utc, dt.datetime(2026, 4, 29, 0, 0, tzinfo=dt.timezone.utc))
-        self.assertEqual(mock_post.call_args.kwargs["json"]["model"], "gpt-4o-mini")
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        self.assertEqual(call_kwargs.get("model"), "claude-sonnet-4-6")
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
-    def test_parses_multi_country_price_comparison_query(self, mock_post):
-        mock_post.return_value = MockOpenAIResponse(
-            {
-                "status": "completed",
-                "output_text": json.dumps(
-                    {
-                        "country": "BG",
-                        "countries": ["BG", "RO"],
-                        "resolution": "d",
-                        "generation_series": [],
-                        "include_prices": True,
-                        "timeframe": {
-                            "kind": "last_n_weeks",
-                            "amount": 4,
-                            "start_utc": None,
-                            "end_utc": None,
-                        },
-                    }
-                ),
-            }
-        )
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
+    def test_parses_multi_country_price_comparison_query(self, mock_anthropic):
+        mock_anthropic.return_value = _make_client_mock({
+            "intent": "chart",
+            "country": "BG",
+            "countries": ["BG", "RO"],
+            "resolution": "d",
+            "generation_series": [],
+            "include_prices": True,
+            "timeframe": {"kind": "last_n_weeks", "amount": 4, "start_utc": None, "end_utc": None},
+        })
 
         result = parse_chart_query(
             "Compare the prices for BG and RO for the last month. Daily resolution",
@@ -169,29 +156,18 @@ class ChartQueryParserTest(SimpleTestCase):
         self.assertEqual(parsed.start_utc, dt.datetime(2026, 4, 1, 0, 0, tzinfo=dt.timezone.utc))
         self.assertEqual(parsed.end_utc, dt.datetime(2026, 4, 29, 0, 0, tzinfo=dt.timezone.utc))
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
-    def test_parses_res_query_when_model_returns_res_series(self, mock_post):
-        mock_post.return_value = MockOpenAIResponse(
-            {
-                "status": "completed",
-                "output_text": json.dumps(
-                    {
-                        "country": "BG",
-                        "countries": ["BG", "RO"],
-                        "resolution": "d",
-                        "generation_series": ["res"],
-                        "include_prices": False,
-                        "timeframe": {
-                            "kind": "last_n_weeks",
-                            "amount": 4,
-                            "start_utc": None,
-                            "end_utc": None,
-                        },
-                    }
-                ),
-            }
-        )
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
+    def test_parses_res_query_when_model_returns_res_series(self, mock_anthropic):
+        mock_anthropic.return_value = _make_client_mock({
+            "intent": "chart",
+            "country": "BG",
+            "countries": ["BG", "RO"],
+            "resolution": "d",
+            "generation_series": ["res"],
+            "include_prices": False,
+            "timeframe": {"kind": "last_n_weeks", "amount": 4, "start_utc": None, "end_utc": None},
+        })
 
         result = parse_chart_query(
             "Compare the RES generation for BG and RO last month",
@@ -207,29 +183,18 @@ class ChartQueryParserTest(SimpleTestCase):
         self.assertEqual(parsed.generation_series, ["res"])
         self.assertFalse(parsed.include_prices)
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
-    def test_falls_back_to_res_when_message_mentions_renewables(self, mock_post):
-        mock_post.return_value = MockOpenAIResponse(
-            {
-                "status": "completed",
-                "output_text": json.dumps(
-                    {
-                        "country": "BG",
-                        "countries": ["BG"],
-                        "resolution": "d",
-                        "generation_series": [],
-                        "include_prices": False,
-                        "timeframe": {
-                            "kind": "last_n_weeks",
-                            "amount": 4,
-                            "start_utc": None,
-                            "end_utc": None,
-                        },
-                    }
-                ),
-            }
-        )
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
+    def test_falls_back_to_res_when_message_mentions_renewables(self, mock_anthropic):
+        mock_anthropic.return_value = _make_client_mock({
+            "intent": "chart",
+            "country": "BG",
+            "countries": ["BG"],
+            "resolution": "d",
+            "generation_series": [],
+            "include_prices": False,
+            "timeframe": {"kind": "last_n_weeks", "amount": 4, "start_utc": None, "end_utc": None},
+        })
 
         result = parse_chart_query(
             "Show renewable generation for BG last month",
@@ -241,29 +206,18 @@ class ChartQueryParserTest(SimpleTestCase):
         self.assertIsNotNone(parsed)
         self.assertEqual(parsed.generation_series, ["res"])
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
-    def test_defaults_last_month_to_daily_when_resolution_is_omitted(self, mock_post):
-        mock_post.return_value = MockOpenAIResponse(
-            {
-                "status": "completed",
-                "output_text": json.dumps(
-                    {
-                        "country": "BG",
-                        "countries": ["BG", "RO"],
-                        "resolution": "native",
-                        "generation_series": ["res"],
-                        "include_prices": False,
-                        "timeframe": {
-                            "kind": "last_n_weeks",
-                            "amount": 4,
-                            "start_utc": None,
-                            "end_utc": None,
-                        },
-                    }
-                ),
-            }
-        )
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
+    def test_defaults_last_month_to_daily_when_resolution_is_omitted(self, mock_anthropic):
+        mock_anthropic.return_value = _make_client_mock({
+            "intent": "chart",
+            "country": "BG",
+            "countries": ["BG", "RO"],
+            "resolution": "native",
+            "generation_series": ["res"],
+            "include_prices": False,
+            "timeframe": {"kind": "last_n_weeks", "amount": 4, "start_utc": None, "end_utc": None},
+        })
 
         result = parse_chart_query(
             "Compare the RES generation for BG and RO last month",
@@ -276,29 +230,18 @@ class ChartQueryParserTest(SimpleTestCase):
         self.assertEqual(parsed.resolution, "d")
         self.assertEqual(parsed.time_phrase, "last 4 weeks at daily resolution")
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
-    def test_defaults_short_windows_to_native_when_resolution_is_omitted(self, mock_post):
-        mock_post.return_value = MockOpenAIResponse(
-            {
-                "status": "completed",
-                "output_text": json.dumps(
-                    {
-                        "country": "BG",
-                        "countries": ["BG"],
-                        "resolution": "native",
-                        "generation_series": ["wind"],
-                        "include_prices": False,
-                        "timeframe": {
-                            "kind": "last_n_days",
-                            "amount": 2,
-                            "start_utc": None,
-                            "end_utc": None,
-                        },
-                    }
-                ),
-            }
-        )
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
+    def test_defaults_short_windows_to_native_when_resolution_is_omitted(self, mock_anthropic):
+        mock_anthropic.return_value = _make_client_mock({
+            "intent": "chart",
+            "country": "BG",
+            "countries": ["BG"],
+            "resolution": "native",
+            "generation_series": ["wind"],
+            "include_prices": False,
+            "timeframe": {"kind": "last_n_days", "amount": 2, "start_utc": None, "end_utc": None},
+        })
 
         result = parse_chart_query(
             "Show the wind generation for BG for the last couple of days",
@@ -311,30 +254,19 @@ class ChartQueryParserTest(SimpleTestCase):
         self.assertEqual(parsed.resolution, "")
         self.assertEqual(parsed.time_phrase, "last 2 days")
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
-    def test_visual_follow_up_reuses_previous_query_context(self, mock_post):
-        mock_post.return_value = MockOpenAIResponse(
-            {
-                "status": "completed",
-                "output_text": json.dumps(
-                    {
-                        "country": "",
-                        "countries": [],
-                        "resolution": "native",
-                        "generation_series": [],
-                        "include_prices": False,
-                        "chart_type": "bar",
-                        "timeframe": {
-                            "kind": "today",
-                            "amount": None,
-                            "start_utc": None,
-                            "end_utc": None,
-                        },
-                    }
-                ),
-            }
-        )
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
+    def test_visual_follow_up_reuses_previous_query_context(self, mock_anthropic):
+        mock_anthropic.return_value = _make_client_mock({
+            "intent": "chart",
+            "country": "",
+            "countries": [],
+            "resolution": "native",
+            "generation_series": [],
+            "include_prices": False,
+            "chart_type": "bar",
+            "timeframe": {"kind": "today", "amount": None, "start_utc": None, "end_utc": None},
+        })
 
         result = parse_chart_query(
             "can you make it as bar chart",
@@ -362,30 +294,19 @@ class ChartQueryParserTest(SimpleTestCase):
         self.assertEqual(parsed.end_utc, dt.datetime(2026, 4, 29, 0, 0, tzinfo=dt.timezone.utc))
         self.assertEqual(parsed.resolution, "d")
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
-    def test_visual_follow_up_without_context_returns_actionable_error(self, mock_post):
-        mock_post.return_value = MockOpenAIResponse(
-            {
-                "status": "completed",
-                "output_text": json.dumps(
-                    {
-                        "country": "",
-                        "countries": [],
-                        "resolution": "native",
-                        "generation_series": [],
-                        "include_prices": False,
-                        "chart_type": "bar",
-                        "timeframe": {
-                            "kind": "today",
-                            "amount": None,
-                            "start_utc": None,
-                            "end_utc": None,
-                        },
-                    }
-                ),
-            }
-        )
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
+    def test_visual_follow_up_without_context_returns_actionable_error(self, mock_anthropic):
+        mock_anthropic.return_value = _make_client_mock({
+            "intent": "chart",
+            "country": "",
+            "countries": [],
+            "resolution": "native",
+            "generation_series": [],
+            "include_prices": False,
+            "chart_type": "bar",
+            "timeframe": {"kind": "today", "amount": None, "start_utc": None, "end_utc": None},
+        })
 
         result = parse_chart_query(
             "can you make it as bar chart",
@@ -394,31 +315,20 @@ class ChartQueryParserTest(SimpleTestCase):
 
         self.assertEqual(result.status, "needs_clarification")
         self.assertEqual(result.clarification.missing_fields, ["metric", "country", "timeframe"])
-        self.assertIn("Which metric", result.clarification.question)
+        self.assertIn("Which", result.clarification.question)
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
-    def test_explicit_message_details_override_stale_model_output(self, mock_post):
-        mock_post.return_value = MockOpenAIResponse(
-            {
-                "status": "completed",
-                "output_text": json.dumps(
-                    {
-                        "country": "BG",
-                        "countries": ["BG"],
-                        "resolution": "d",
-                        "generation_series": ["wind", "solar"],
-                        "include_prices": True,
-                        "timeframe": {
-                            "kind": "last_n_weeks",
-                            "amount": 2,
-                            "start_utc": None,
-                            "end_utc": None,
-                        },
-                    }
-                ),
-            }
-        )
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
+    def test_explicit_message_details_override_stale_model_output(self, mock_anthropic):
+        mock_anthropic.return_value = _make_client_mock({
+            "intent": "chart",
+            "country": "BG",
+            "countries": ["BG"],
+            "resolution": "d",
+            "generation_series": ["wind", "solar"],
+            "include_prices": True,
+            "timeframe": {"kind": "last_n_weeks", "amount": 2, "start_utc": None, "end_utc": None},
+        })
 
         result = parse_chart_query(
             "Compare res generation for BG and RO for April. Daily resolution",
@@ -437,33 +347,21 @@ class ChartQueryParserTest(SimpleTestCase):
         self.assertEqual(parsed.end_utc, dt.datetime(2026, 4, 30, 0, 0, tzinfo=dt.timezone.utc))
         self.assertEqual(parsed.time_phrase, "April at daily resolution")
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
-    def test_returns_clarification_when_timeframe_is_missing(self, mock_post):
-        mock_post.return_value = MockOpenAIResponse(
-            {
-                "status": "completed",
-                "output_text": json.dumps(
-                    {
-                        "decision": "needs_clarification",
-                        "clarifying_question": "What time range should I use for BG prices?",
-                        "missing_fields": ["timeframe"],
-                        "country": "BG",
-                        "countries": ["BG"],
-                        "resolution": "native",
-                        "generation_series": [],
-                        "include_prices": True,
-                        "chart_type": "line",
-                        "timeframe": {
-                            "kind": "unknown",
-                            "amount": None,
-                            "start_utc": None,
-                            "end_utc": None,
-                        },
-                    }
-                ),
-            }
-        )
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
+    def test_returns_clarification_when_timeframe_is_missing(self, mock_anthropic):
+        mock_anthropic.return_value = _make_client_mock({
+            "intent": "needs_clarification",
+            "clarifying_question": "What time range should I use for BG prices?",
+            "missing_fields": ["timeframe"],
+            "country": "BG",
+            "countries": ["BG"],
+            "resolution": "native",
+            "generation_series": [],
+            "include_prices": True,
+            "chart_type": "line",
+            "timeframe": {"kind": "unknown", "amount": None, "start_utc": None, "end_utc": None},
+        })
 
         result = parse_chart_query(
             "Show me BG prices",
@@ -474,30 +372,20 @@ class ChartQueryParserTest(SimpleTestCase):
         self.assertEqual(result.clarification.missing_fields, ["timeframe"])
         self.assertEqual(result.clarification.question, "What time range should I use for BG prices?")
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
-    def test_passes_recent_conversation_context_to_openai(self, mock_post):
-        mock_post.return_value = MockOpenAIResponse(
-            {
-                "status": "completed",
-                "output_text": json.dumps(
-                    {
-                        "country": "BG",
-                        "countries": ["BG"],
-                        "resolution": "d",
-                        "generation_series": [],
-                        "include_prices": True,
-                        "chart_type": "line",
-                        "timeframe": {
-                            "kind": "last_n_weeks",
-                            "amount": 4,
-                            "start_utc": None,
-                            "end_utc": None,
-                        },
-                    }
-                ),
-            }
-        )
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
+    def test_passes_recent_conversation_context_to_claude(self, mock_anthropic):
+        mock_client = _make_client_mock({
+            "intent": "chart",
+            "country": "BG",
+            "countries": ["BG"],
+            "resolution": "d",
+            "generation_series": [],
+            "include_prices": True,
+            "chart_type": "line",
+            "timeframe": {"kind": "last_n_weeks", "amount": 4, "start_utc": None, "end_utc": None},
+        })
+        mock_anthropic.return_value = mock_client
 
         result = parse_chart_query(
             "last month",
@@ -514,10 +402,16 @@ class ChartQueryParserTest(SimpleTestCase):
         )
 
         self.assertEqual(result.status, "ready")
-        payload_input = mock_post.call_args.kwargs["json"]["input"]
-        self.assertTrue(any(item["role"] == "assistant" and item["content"] == "What time range should I use for BG prices?" for item in payload_input))
-        self.assertTrue(any(item["role"] == "user" and item["content"] == "Show me the prices for BG" for item in payload_input))
-        self.assertEqual(payload_input[-1], {"role": "user", "content": "last month"})
+        messages_sent = mock_client.messages.create.call_args.kwargs.get("messages", [])
+        self.assertTrue(any(
+            item["role"] == "assistant" and item["content"] == "What time range should I use for BG prices?"
+            for item in messages_sent
+        ))
+        self.assertTrue(any(
+            item["role"] == "user" and item["content"] == "Show me the prices for BG"
+            for item in messages_sent
+        ))
+        self.assertEqual(messages_sent[-1], {"role": "user", "content": "last month"})
 
 
 class FetchGenerationEsoBgHelpersTest(SimpleTestCase):
@@ -741,31 +635,20 @@ class ChartQueryApiTest(TestCase):
                 resolution="PT60M",
             )
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
     @patch("entsoe_api.views._now_utc")
-    def test_chart_query_returns_generation_and_price_panels(self, mock_now_utc, mock_post):
+    def test_chart_query_returns_generation_and_price_panels(self, mock_now_utc, mock_anthropic):
         mock_now_utc.return_value = dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc)
-        mock_post.return_value = MockOpenAIResponse(
-            {
-                "status": "completed",
-                "output_text": json.dumps(
-                    {
-                        "country": "BG",
-                        "countries": ["BG"],
-                        "resolution": "d",
-                        "generation_series": ["wind", "solar"],
-                        "include_prices": True,
-                        "timeframe": {
-                            "kind": "last_n_weeks",
-                            "amount": 2,
-                            "start_utc": None,
-                            "end_utc": None,
-                        },
-                    }
-                ),
-            }
-        )
+        mock_anthropic.return_value = _make_client_mock({
+            "intent": "chart",
+            "country": "BG",
+            "countries": ["BG"],
+            "resolution": "d",
+            "generation_series": ["wind", "solar"],
+            "include_prices": True,
+            "timeframe": {"kind": "last_n_weeks", "amount": 2, "start_utc": None, "end_utc": None},
+        })
 
         response = self.client.post(
             "/api/chart-query/",
@@ -795,31 +678,20 @@ class ChartQueryApiTest(TestCase):
         self.assertEqual(prices_panel["id"], "prices")
         self.assertEqual(prices_panel["series"][0]["data"][0]["value"], 70.0)
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
     @patch("entsoe_api.views._now_utc")
-    def test_chart_query_returns_multi_country_price_panel(self, mock_now_utc, mock_post):
+    def test_chart_query_returns_multi_country_price_panel(self, mock_now_utc, mock_anthropic):
         mock_now_utc.return_value = dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc)
-        mock_post.return_value = MockOpenAIResponse(
-            {
-                "status": "completed",
-                "output_text": json.dumps(
-                    {
-                        "country": "BG",
-                        "countries": ["BG", "RO"],
-                        "resolution": "d",
-                        "generation_series": [],
-                        "include_prices": True,
-                        "timeframe": {
-                            "kind": "last_n_weeks",
-                            "amount": 4,
-                            "start_utc": None,
-                            "end_utc": None,
-                        },
-                    }
-                ),
-            }
-        )
+        mock_anthropic.return_value = _make_client_mock({
+            "intent": "chart",
+            "country": "BG",
+            "countries": ["BG", "RO"],
+            "resolution": "d",
+            "generation_series": [],
+            "include_prices": True,
+            "timeframe": {"kind": "last_n_weeks", "amount": 4, "start_utc": None, "end_utc": None},
+        })
 
         response = self.client.post(
             "/api/chart-query/",
@@ -842,31 +714,20 @@ class ChartQueryApiTest(TestCase):
         self.assertEqual(prices_panel["series"][0]["data"][0]["value"], 70.0)
         self.assertEqual(prices_panel["series"][1]["data"][0]["value"], 50.0)
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
     @patch("entsoe_api.views._now_utc")
-    def test_chart_query_returns_multi_country_res_panel(self, mock_now_utc, mock_post):
+    def test_chart_query_returns_multi_country_res_panel(self, mock_now_utc, mock_anthropic):
         mock_now_utc.return_value = dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc)
-        mock_post.return_value = MockOpenAIResponse(
-            {
-                "status": "completed",
-                "output_text": json.dumps(
-                    {
-                        "country": "BG",
-                        "countries": ["BG", "RO"],
-                        "resolution": "d",
-                        "generation_series": ["res"],
-                        "include_prices": False,
-                        "timeframe": {
-                            "kind": "last_n_weeks",
-                            "amount": 4,
-                            "start_utc": None,
-                            "end_utc": None,
-                        },
-                    }
-                ),
-            }
-        )
+        mock_anthropic.return_value = _make_client_mock({
+            "intent": "chart",
+            "country": "BG",
+            "countries": ["BG", "RO"],
+            "resolution": "d",
+            "generation_series": ["res"],
+            "include_prices": False,
+            "timeframe": {"kind": "last_n_weeks", "amount": 4, "start_utc": None, "end_utc": None},
+        })
 
         response = self.client.post(
             "/api/chart-query/",
@@ -889,32 +750,21 @@ class ChartQueryApiTest(TestCase):
         self.assertEqual(generation_panel["series"][0]["data"][0]["value"], 22.0)
         self.assertEqual(generation_panel["series"][1]["data"][0]["value"], 17.0)
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
     @patch("entsoe_api.views._now_utc")
-    def test_chart_query_follow_up_can_switch_to_bar_chart(self, mock_now_utc, mock_post):
+    def test_chart_query_follow_up_can_switch_to_bar_chart(self, mock_now_utc, mock_anthropic):
         mock_now_utc.return_value = dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc)
-        mock_post.return_value = MockOpenAIResponse(
-            {
-                "status": "completed",
-                "output_text": json.dumps(
-                    {
-                        "country": "",
-                        "countries": [],
-                        "resolution": "native",
-                        "generation_series": [],
-                        "include_prices": False,
-                        "chart_type": "bar",
-                        "timeframe": {
-                            "kind": "today",
-                            "amount": None,
-                            "start_utc": None,
-                            "end_utc": None,
-                        },
-                    }
-                ),
-            }
-        )
+        mock_anthropic.return_value = _make_client_mock({
+            "intent": "chart",
+            "country": "",
+            "countries": [],
+            "resolution": "native",
+            "generation_series": [],
+            "include_prices": False,
+            "chart_type": "bar",
+            "timeframe": {"kind": "today", "amount": None, "start_utc": None, "end_utc": None},
+        })
 
         response = self.client.post(
             "/api/chart-query/",
@@ -944,31 +794,20 @@ class ChartQueryApiTest(TestCase):
         self.assertEqual(payload["panels"][0]["type"], "bar")
         self.assertIn("bar chart", payload["assistant_message"])
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
     @patch("entsoe_api.views._now_utc")
-    def test_chart_query_uses_explicit_message_details_when_model_output_is_stale(self, mock_now_utc, mock_post):
+    def test_chart_query_uses_explicit_message_details_when_model_output_is_stale(self, mock_now_utc, mock_anthropic):
         mock_now_utc.return_value = dt.datetime(2026, 4, 30, 13, 0, tzinfo=dt.timezone.utc)
-        mock_post.return_value = MockOpenAIResponse(
-            {
-                "status": "completed",
-                "output_text": json.dumps(
-                    {
-                        "country": "BG",
-                        "countries": ["BG"],
-                        "resolution": "d",
-                        "generation_series": ["wind", "solar"],
-                        "include_prices": True,
-                        "timeframe": {
-                            "kind": "last_n_weeks",
-                            "amount": 2,
-                            "start_utc": None,
-                            "end_utc": None,
-                        },
-                    }
-                ),
-            }
-        )
+        mock_anthropic.return_value = _make_client_mock({
+            "intent": "chart",
+            "country": "BG",
+            "countries": ["BG"],
+            "resolution": "d",
+            "generation_series": ["wind", "solar"],
+            "include_prices": True,
+            "timeframe": {"kind": "last_n_weeks", "amount": 2, "start_utc": None, "end_utc": None},
+        })
 
         response = self.client.post(
             "/api/chart-query/",
@@ -989,35 +828,23 @@ class ChartQueryApiTest(TestCase):
         self.assertEqual(payload["panels"][0]["title"], "BG vs RO renewable generation")
         self.assertEqual([series["id"] for series in payload["panels"][0]["series"]], ["bg_res", "ro_res"])
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
     @patch("entsoe_api.views._now_utc")
-    def test_chart_query_returns_clarifying_question_when_request_is_ambiguous(self, mock_now_utc, mock_post):
+    def test_chart_query_returns_clarifying_question_when_request_is_ambiguous(self, mock_now_utc, mock_anthropic):
         mock_now_utc.return_value = dt.datetime(2026, 4, 30, 13, 0, tzinfo=dt.timezone.utc)
-        mock_post.return_value = MockOpenAIResponse(
-            {
-                "status": "completed",
-                "output_text": json.dumps(
-                    {
-                        "decision": "needs_clarification",
-                        "clarifying_question": "Which country and what time range should I use for the chart?",
-                        "missing_fields": ["country", "timeframe"],
-                        "country": "",
-                        "countries": [],
-                        "resolution": "native",
-                        "generation_series": [],
-                        "include_prices": True,
-                        "chart_type": "line",
-                        "timeframe": {
-                            "kind": "unknown",
-                            "amount": None,
-                            "start_utc": None,
-                            "end_utc": None,
-                        },
-                    }
-                ),
-            }
-        )
+        mock_anthropic.return_value = _make_client_mock({
+            "intent": "needs_clarification",
+            "clarifying_question": "Which country and what time range should I use for the chart?",
+            "missing_fields": ["country", "timeframe"],
+            "country": "",
+            "countries": [],
+            "resolution": "native",
+            "generation_series": [],
+            "include_prices": True,
+            "chart_type": "line",
+            "timeframe": {"kind": "unknown", "amount": None, "start_utc": None, "end_utc": None},
+        })
 
         response = self.client.post(
             "/api/chart-query/",
@@ -1036,54 +863,34 @@ class ChartQueryApiTest(TestCase):
         self.assertEqual(payload["panels"], [])
         self.assertTrue(payload["conversation_id"])
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_CHART_QUERY_MODEL="gpt-4o-mini")
-    @patch("entsoe_api.chart_query.requests.post")
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.chart_query.anthropic.Anthropic")
     @patch("entsoe_api.views._now_utc")
-    def test_chart_query_reuses_redis_conversation_context_for_follow_up(self, mock_now_utc, mock_post):
+    def test_chart_query_reuses_redis_conversation_context_for_follow_up(self, mock_now_utc, mock_anthropic):
         mock_now_utc.return_value = dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc)
-        mock_post.side_effect = [
-            MockOpenAIResponse(
-                {
-                    "status": "completed",
-                    "output_text": json.dumps(
-                        {
-                            "country": "BG",
-                            "countries": ["BG", "RO"],
-                            "resolution": "d",
-                            "generation_series": ["res"],
-                            "include_prices": False,
-                            "chart_type": "line",
-                            "timeframe": {
-                                "kind": "last_n_weeks",
-                                "amount": 4,
-                                "start_utc": None,
-                                "end_utc": None,
-                            },
-                        }
-                    ),
-                }
-            ),
-            MockOpenAIResponse(
-                {
-                    "status": "completed",
-                    "output_text": json.dumps(
-                        {
-                            "country": "",
-                            "countries": [],
-                            "resolution": "native",
-                            "generation_series": [],
-                            "include_prices": False,
-                            "chart_type": "bar",
-                            "timeframe": {
-                                "kind": "today",
-                                "amount": None,
-                                "start_utc": None,
-                                "end_utc": None,
-                            },
-                        }
-                    ),
-                }
-            ),
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        mock_client.messages.create.side_effect = [
+            _make_response({
+                "intent": "chart",
+                "country": "BG",
+                "countries": ["BG", "RO"],
+                "resolution": "d",
+                "generation_series": ["res"],
+                "include_prices": False,
+                "chart_type": "line",
+                "timeframe": {"kind": "last_n_weeks", "amount": 4, "start_utc": None, "end_utc": None},
+            }),
+            _make_response({
+                "intent": "chart",
+                "country": "",
+                "countries": [],
+                "resolution": "native",
+                "generation_series": [],
+                "include_prices": False,
+                "chart_type": "bar",
+                "timeframe": {"kind": "today", "amount": None, "start_utc": None, "end_utc": None},
+            }),
         ]
 
         first_response = self.client.post(
