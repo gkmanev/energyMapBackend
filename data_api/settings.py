@@ -45,11 +45,13 @@ CORS_ALLOWED_ORIGINS = [
     "http://85.14.6.37:16542",
     "http://159.89.103.242",
     "http://visualize.energy",
-    "https://visualize.energy"
+    "https://visualize.energy",
+    "http://209.38.208.230"
 ]
 CSRF_TRUSTED_ORIGINS = [
     "https://visualize.energy",
     "https://api.visualize.energy",
+    "http://209.38.208.230"
 ]
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
