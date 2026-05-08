@@ -465,6 +465,26 @@ def _fetch_generation_data_for_analysis(query: ParsedDataQuery) -> list[dict]:
     return result
 
 
+def _fetch_capacity_data_for_analysis(data_query: "ParsedDataQuery") -> list[dict]:
+    """Installed capacity snapshot rows passed to Claude for analysis."""
+    year = data_query.start_utc.year
+    rows = (
+        CountryCapacitySnapshot.objects
+        .filter(country_id__in=data_query.countries, year=year)
+        .order_by("country_id", "psr_name")
+        .values("country_id", "psr_type", "psr_name", "installed_capacity_mw")
+    )
+    return [
+        {
+            "country": r["country_id"],
+            "psr_type": r["psr_type"],
+            "psr_name": r["psr_name"],
+            "installed_capacity_mw": float(r["installed_capacity_mw"]) if r["installed_capacity_mw"] is not None else None,
+        }
+        for r in rows
+    ]
+
+
 def _describe_chart_query(query: ParsedChartQuery) -> str:
     if query.include_prices and query.generation_series:
         metric_text = "generation and prices"
@@ -772,6 +792,8 @@ class ChartQueryView(APIView):
 
             if data_query.data_type == "prices":
                 data_rows = _fetch_price_data_for_analysis(data_query)
+            elif data_query.data_type == "capacity":
+                data_rows = _fetch_capacity_data_for_analysis(data_query)
             else:  # generation_res
                 data_rows = _fetch_generation_data_for_analysis(data_query)
 

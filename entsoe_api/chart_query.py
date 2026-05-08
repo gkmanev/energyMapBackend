@@ -170,11 +170,14 @@ LT, LU, LV, ME, MK, MT, NL, NO, PL, PT, RO, RS, SE, SI, SK, TR, UA, XK, GE and o
 **data** – User wants a computed statistic, not a chart. Triggers on keywords like: average, avg,
   mean, max, maximum, min, minimum, highest, lowest, total, sum, how many, count, number of,
   "what was the", "what is the", "how much did", "days with", "hours above/below".
+  Also use "data" when user asks about installed capacity (data_type: capacity) — the backend
+  will look up the capacity snapshot for the requested country and year.
   The backend will fetch the raw data and pass it back to Claude for analysis, so there is no
   need to specify an aggregate function — just classify as "data" and extract the query parameters.
-  - Only supported for data_type "prices" and "generation_res".
-    For data_type "flows", "capacity", or "generation" use intent "chart" instead.
-  - Still extract countries, timeframe, generation_series / include_prices.
+  - Supported for data_type "prices", "generation_res", and "capacity".
+    For data_type "flows" or "generation" use intent "chart" instead.
+  - For capacity: extract country and timeframe (year). generation_series and include_prices are unused.
+  - Still extract countries, timeframe, generation_series / include_prices for other types.
   - Set resolution to "native" and chart_type to "line" (ignored for data intent).
 **text** – User asks a general question you can answer without hitting the database:
   - "What data do you have?" → describe available datasets
@@ -192,7 +195,7 @@ LT, LU, LV, ME, MK, MT, NL, NO, PL, PT, RO, RS, SE, SI, SK, TR, UA, XK, GE and o
 - "prices", "electricity price", "spot price", "day-ahead" → include_prices: true, data_type: prices
 - User can request generation AND prices simultaneously → fill generation_series AND set include_prices: true
 - "flows", "cross-border", "import from X to Y", "export from X to Y" → data_type: flows, fill country_from and country_to
-- "capacity", "installed capacity" → data_type: capacity
+- "capacity", "installed capacity" → data_type: capacity, intent: data
 
 ## Timeframe rules
 
@@ -214,7 +217,8 @@ LT, LU, LV, ME, MK, MT, NL, NO, PL, PT, RO, RS, SE, SI, SK, TR, UA, XK, GE and o
 
 ## Missing fields
 
-- generation_series is empty AND include_prices is false AND data_type is null → add "metric" to missing_fields
+- generation_series is empty AND include_prices is false AND data_type is null or empty → add "metric" to missing_fields
+- If data_type is set to any non-null value ("capacity", "prices", "generation_res", "flows", "generation"), metric is NOT missing
 - countries is empty → add "country" to missing_fields
 - timeframe kind is "unknown" → add "timeframe" to missing_fields
 
@@ -784,7 +788,14 @@ def _infer_missing_fields(intent: dict, *, message: str, now_utc: dt.datetime) -
         if str(item).strip()
     ]
     include_prices = bool(intent.get("include_prices", False))
-    if not generation_series and not include_prices and not _message_implies_res_generation(message):
+    data_type = str(intent.get("data_type") or "").strip().lower()
+    _known_standalone_types = {"capacity", "flows", "generation", "generation_res", "prices"}
+    if (
+        not generation_series
+        and not include_prices
+        and not _message_implies_res_generation(message)
+        and data_type not in _known_standalone_types
+    ):
         missing_fields.append("metric")
 
     explicit_month_window = _extract_calendar_month_window(message, now_utc)
@@ -806,7 +817,7 @@ def _infer_missing_fields(intent: dict, *, message: str, now_utc: dt.datetime) -
     return _ordered_unique(missing_fields)
 
 
-_SUPPORTED_DATA_TYPES = {"prices", "generation_res"}
+_SUPPORTED_DATA_TYPES = {"prices", "generation_res", "capacity"}
 
 
 def _parse_data_query(
@@ -858,6 +869,7 @@ def _parse_data_query(
             generation_series = ["res"]
         if not generation_series:
             raise ChartQueryNeedsClarification(["metric"])
+    # data_type == "capacity": no generation_series or include_prices needed
 
     return ParsedDataQuery(
         original_message=message,
@@ -912,7 +924,9 @@ def _parse_ready_chart_query(
     include_prices = bool(intent.get("include_prices", False))
     if not generation_series and _message_implies_res_generation(message):
         generation_series = ["res"]
-    if not generation_series and not include_prices:
+    data_type_for_chart = str(intent.get("data_type") or "").strip().lower()
+    _known_standalone_chart_types = {"capacity", "flows", "generation", "generation_res", "prices"}
+    if not generation_series and not include_prices and data_type_for_chart not in _known_standalone_chart_types:
         raise ChartQueryNeedsClarification(["metric"])
 
     chart_type = str(intent.get("chart_type", "line")).strip().lower()
@@ -964,6 +978,12 @@ def build_data_description(query: ParsedDataQuery) -> str:
         return (
             f"Day-ahead electricity prices (EUR/MWh) for {countries_str} — {query.time_phrase}. "
             "Columns: date, avg_eur_mwh, max_eur_mwh, min_eur_mwh, hour_count."
+        )
+    if query.data_type == "capacity":
+        year = query.start_utc.year
+        return (
+            f"Installed generation capacity (MW) for {countries_str} — year {year}. "
+            "Columns: psr_type, psr_name, installed_capacity_mw."
         )
     series_str = " + ".join(query.generation_series) if query.generation_series else "RES"
     return (
