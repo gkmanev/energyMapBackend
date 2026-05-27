@@ -3,6 +3,8 @@ from django.core.management.base import BaseCommand
 import shutil
 import time
 import os
+import re
+import subprocess
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -17,6 +19,37 @@ CYPRUS_TZ = ZoneInfo("Asia/Nicosia")
 
 class SeleniumExcelScraper:
     """Automates browser to click Excel export button on TSOC website and download actual market data."""
+
+    @staticmethod
+    def _detect_chrome() -> tuple[str | None, int | None]:
+        """Return installed Chrome binary path and major version if available."""
+        candidates = [
+            "google-chrome",
+            "google-chrome-stable",
+            "chromium",
+            "chromium-browser",
+        ]
+
+        for candidate in candidates:
+            binary_path = shutil.which(candidate)
+            if not binary_path:
+                continue
+
+            try:
+                output = subprocess.check_output(
+                    [binary_path, "--version"],
+                    text=True,
+                    stderr=subprocess.STDOUT,
+                ).strip()
+            except Exception:
+                return binary_path, None
+
+            match = re.search(r"(\d+)\.", output)
+            if match:
+                return binary_path, int(match.group(1))
+            return binary_path, None
+
+        return None, None
 
     def run(self, start_date: str = "today", end_date: str = "today") -> dict:
         """
@@ -65,6 +98,10 @@ class SeleniumExcelScraper:
             # Avoid profile permission issues in containers.
             chrome_options.add_argument("--user-data-dir=/tmp/chrome")
 
+            chrome_binary, chrome_major = self._detect_chrome()
+            if chrome_binary:
+                chrome_options.binary_location = chrome_binary
+
             prefs = {
                 "download.default_directory": download_dir,
                 "download.prompt_for_download": False,
@@ -73,7 +110,14 @@ class SeleniumExcelScraper:
             }
             chrome_options.add_experimental_option("prefs", prefs)
 
-            driver = uc.Chrome(options=chrome_options, use_subprocess=True, version_main=145)
+            chrome_kwargs = {
+                "options": chrome_options,
+                "use_subprocess": True,
+            }
+            if chrome_major is not None:
+                chrome_kwargs["version_main"] = chrome_major
+
+            driver = uc.Chrome(**chrome_kwargs)
 
             url = (
                 f"https://tsoc.org.cy/competitive-electricity-market/"
@@ -163,7 +207,7 @@ class SeleniumExcelScraper:
                 "status": "error",
                 "error_type": type(e).__name__,
                 "error_message": str(e),
-                "suggestion": "Ensure Chrome is installed.",
+                "suggestion": "Ensure Chrome is installed and ChromeDriver matches the browser version.",
             }
 
         finally:
