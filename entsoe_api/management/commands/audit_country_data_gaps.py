@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -214,10 +215,16 @@ class Command(BaseCommand):
             default="text",
             help="Output format (default: text).",
         )
+        parser.add_argument(
+            "--year",
+            type=int,
+            help="Optional UTC calendar year to audit, for example 2025.",
+        )
 
     def handle(self, *args, **options):
         specs = self._select_specs(options.get("datasets"))
         table_names = set(connection.introspection.table_names())
+        selected_year = options.get("year")
         selected_countries = self._select_countries(
             options.get("countries"),
             specs,
@@ -232,6 +239,7 @@ class Command(BaseCommand):
             table_names=table_names,
             top=max(options.get("top", 3), 1),
             include_all=bool(options.get("full")),
+            selected_year=selected_year,
         )
 
         if options.get("format") == "json":
@@ -340,6 +348,7 @@ class Command(BaseCommand):
         table_names: set[str],
         top: int,
         include_all: bool,
+        selected_year: int | None,
     ) -> dict[str, Any]:
         per_country: dict[str, list[dict[str, Any]]] = {country: [] for country in countries}
 
@@ -352,6 +361,7 @@ class Command(BaseCommand):
                 spec=spec,
                 countries=sorted(applicable),
                 table_names=table_names,
+                selected_year=selected_year,
             )
             for row in dataset_rows:
                 per_country[row["country"]].append(row)
@@ -373,6 +383,7 @@ class Command(BaseCommand):
             "selected_datasets": [spec.key for spec in specs],
             "top": top,
             "full": include_all,
+            "year": selected_year,
         }
 
     def _dataset_rows_for_spec(
@@ -381,6 +392,7 @@ class Command(BaseCommand):
         spec: DatasetSpec,
         countries: list[str],
         table_names: set[str],
+        selected_year: int | None,
     ) -> list[dict[str, Any]]:
         table_present = spec.table_name in table_names
         if not table_present:
@@ -405,7 +417,7 @@ class Command(BaseCommand):
             "country_ts": self._collect_country_ts_stats,
             "flows": self._collect_flow_stats,
         }
-        stats = collectors[spec.stat_kind](spec, countries)
+        stats = collectors[spec.stat_kind](spec, countries, selected_year)
         best_units = max((item["units_observed"] for item in stats.values()), default=0)
         table_empty = best_units == 0
 
@@ -448,6 +460,7 @@ class Command(BaseCommand):
         self,
         spec: DatasetSpec,
         countries: list[str],
+        selected_year: int | None,
     ) -> dict[str, dict[str, Any]]:
         existing = set(Country.objects.filter(iso_code__in=countries).values_list("iso_code", flat=True))
         stats: dict[str, dict[str, Any]] = {}
@@ -464,8 +477,11 @@ class Command(BaseCommand):
         self,
         spec: DatasetSpec,
         countries: list[str],
+        selected_year: int | None,
     ) -> dict[str, dict[str, Any]]:
         queryset = spec.model.objects.filter(country_id__in=countries)
+        if selected_year is not None:
+            queryset = queryset.filter(year=selected_year)
         if spec.extra_filters:
             queryset = queryset.filter(**spec.extra_filters)
 
@@ -489,8 +505,17 @@ class Command(BaseCommand):
         self,
         spec: DatasetSpec,
         countries: list[str],
+        selected_year: int | None,
     ) -> dict[str, dict[str, Any]]:
         queryset = spec.model.objects.filter(country_id__in=countries)
+        if selected_year is not None:
+            year_start, year_end = self._year_bounds(selected_year)
+            queryset = queryset.filter(
+                **{
+                    f"{spec.time_field}__gte": year_start,
+                    f"{spec.time_field}__lt": year_end,
+                }
+            )
         if spec.extra_filters:
             queryset = queryset.filter(**spec.extra_filters)
 
@@ -514,12 +539,21 @@ class Command(BaseCommand):
         self,
         spec: DatasetSpec,
         countries: list[str],
+        selected_year: int | None,
     ) -> dict[str, dict[str, Any]]:
         stats: dict[str, dict[str, Any]] = {}
+        year_start = year_end = None
+        if selected_year is not None:
+            year_start, year_end = self._year_bounds(selected_year)
         for country in countries:
             queryset = PhysicalFlow.objects.filter(
                 Q(country_from_id=country) | Q(country_to_id=country)
             )
+            if selected_year is not None:
+                queryset = queryset.filter(
+                    datetime_utc__gte=year_start,
+                    datetime_utc__lt=year_end,
+                )
             row_count = queryset.count()
             if row_count == 0:
                 stats[country] = {
@@ -573,6 +607,12 @@ class Command(BaseCommand):
             "table_present": table_present,
         }
 
+    def _year_bounds(self, year: int) -> tuple[dt.datetime, dt.datetime]:
+        return (
+            dt.datetime(year, 1, 1, tzinfo=dt.timezone.utc),
+            dt.datetime(year + 1, 1, 1, tzinfo=dt.timezone.utc),
+        )
+
     def _sort_key(self, row: dict[str, Any]) -> tuple[Any, ...]:
         return (
             STATUS_PRIORITY.get(row["status"], 99),
@@ -586,6 +626,8 @@ class Command(BaseCommand):
         self.stdout.write(
             "Datasets: " + ", ".join(report["selected_datasets"])
         )
+        if report["year"] is not None:
+            self.stdout.write(f"Year: {report['year']}")
         self.stdout.write("")
 
         for country_payload in report["countries"]:

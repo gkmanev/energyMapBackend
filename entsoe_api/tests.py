@@ -678,6 +678,48 @@ class AuditCountryDataGapsCommandTest(TestCase):
         self.assertEqual(dataset["status"], "table_missing")
         self.assertFalse(dataset["table_present"])
 
+    def test_filters_generation_by_year(self):
+        CountryGenerationByType.objects.create(
+            country_id="BG",
+            datetime_utc=dt.datetime(2025, 12, 31, 23, 0, tzinfo=dt.timezone.utc),
+            psr_type="B16",
+            psr_name="Solar",
+            generation_mw=10,
+            resolution="PT60M",
+        )
+        for timestamp in [
+            dt.datetime(2026, 1, 1, 0, 0, tzinfo=dt.timezone.utc),
+            dt.datetime(2026, 1, 1, 1, 0, tzinfo=dt.timezone.utc),
+        ]:
+            CountryGenerationByType.objects.create(
+                country_id="BG",
+                datetime_utc=timestamp,
+                psr_type="B16",
+                psr_name="Solar",
+                generation_mw=10,
+                resolution="PT60M",
+            )
+
+        stdout = StringIO()
+        call_command(
+            "audit_country_data_gaps",
+            datasets="generation",
+            countries="BG",
+            format="json",
+            full=True,
+            year=2026,
+            stdout=stdout,
+        )
+
+        payload = json.loads(stdout.getvalue())
+        dataset = payload["countries"][0]["datasets"][0]
+        self.assertEqual(payload["year"], 2026)
+        self.assertEqual(dataset["dataset"], "generation")
+        self.assertEqual(dataset["units_observed"], 2)
+        self.assertEqual(dataset["row_count"], 2)
+        self.assertEqual(dataset["first_seen"], "2026-01-01T00:00:00+00:00")
+        self.assertEqual(dataset["last_seen"], "2026-01-01T01:00:00+00:00")
+
 
 class ChartQueryApiTest(TestCase):
     def setUp(self):
