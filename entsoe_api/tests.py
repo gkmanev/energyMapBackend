@@ -1,9 +1,12 @@
 import datetime as dt
 import json
+from io import StringIO
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+from django.core.management import call_command
 from django.core.cache import cache
+from django.db import connection
 from django.test import SimpleTestCase, TestCase, override_settings
 
 from entsoe_api.chart_conversation import load_chart_conversation
@@ -19,7 +22,14 @@ from entsoe_api.management.commands.fetch_global_tilted_irradiance import (
     _compute_date_window,
     _iter_date_chunks,
 )
-from entsoe_api.models import Country, CountryPricePoint, CountryResGenerationByType, CountryWindSpeedPoint
+from entsoe_api.models import (
+    Country,
+    CountryGenerationByType,
+    CountryGenerationForecastByType,
+    CountryPricePoint,
+    CountryResGenerationByType,
+    CountryWindSpeedPoint,
+)
 from entsoe_api.views import _parse_iso_utc_floor_hour, _partition_country_codes
 
 
@@ -584,6 +594,89 @@ class WindSpeedApiTest(TestCase):
         self.assertEqual(payload["request_info"]["countries_found"], ["BG"])
         self.assertEqual(payload["request_info"]["total_records"], 1)
         self.assertEqual(payload["data"]["BG"]["items"][0]["wind_speed_120m"], 8.7)
+
+
+@override_settings(
+    ENTSOE_COUNTRY_TO_EICS={"BG": "10YBG", "RO": "10YRO"},
+    ENTSOE_PRICE_COUNTRY_TO_EICS={},
+    COUNTRY_COORDS=[],
+)
+class AuditCountryDataGapsCommandTest(TestCase):
+    def setUp(self):
+        Country.objects.create(iso_code="BG", name="Bulgaria")
+        Country.objects.create(iso_code="RO", name="Romania")
+
+    def test_ranks_worst_dataset_per_country(self):
+        for timestamp in [
+            dt.datetime(2026, 1, 1, 0, 0, tzinfo=dt.timezone.utc),
+            dt.datetime(2026, 1, 1, 1, 0, tzinfo=dt.timezone.utc),
+        ]:
+            CountryGenerationByType.objects.create(
+                country_id="BG",
+                datetime_utc=timestamp,
+                psr_type="B16",
+                psr_name="Solar",
+                generation_mw=10,
+                resolution="PT60M",
+            )
+
+        CountryGenerationByType.objects.create(
+            country_id="RO",
+            datetime_utc=dt.datetime(2026, 1, 1, 0, 0, tzinfo=dt.timezone.utc),
+            psr_type="B16",
+            psr_name="Solar",
+            generation_mw=12,
+            resolution="PT60M",
+        )
+        CountryGenerationForecastByType.objects.create(
+            country_id="BG",
+            datetime_utc=dt.datetime(2026, 1, 1, 0, 0, tzinfo=dt.timezone.utc),
+            psr_type="B16",
+            psr_name="Solar",
+            forecast_mw=11,
+            resolution="PT60M",
+        )
+
+        stdout = StringIO()
+        call_command(
+            "audit_country_data_gaps",
+            datasets="country,generation,generation_forecast",
+            format="json",
+            top=1,
+            stdout=stdout,
+        )
+
+        payload = json.loads(stdout.getvalue())
+        by_country = {item["country"]: item for item in payload["countries"]}
+
+        self.assertEqual(by_country["RO"]["datasets"][0]["dataset"], "generation_forecast")
+        self.assertEqual(by_country["RO"]["datasets"][0]["status"], "no_rows")
+        self.assertEqual(by_country["RO"]["datasets"][0]["best_units"], 1)
+        self.assertEqual(by_country["RO"]["datasets"][0]["units_observed"], 0)
+
+    def test_marks_unmigrated_table_as_table_missing(self):
+        original_table_names = connection.introspection.table_names()
+        missing_table = CountryResGenerationByType._meta.db_table
+
+        with patch(
+            "entsoe_api.management.commands.audit_country_data_gaps.connection.introspection.table_names",
+            return_value=[name for name in original_table_names if name != missing_table],
+        ):
+            stdout = StringIO()
+            call_command(
+                "audit_country_data_gaps",
+                datasets="res_generation",
+                countries="BG",
+                format="json",
+                full=True,
+                stdout=stdout,
+            )
+
+        payload = json.loads(stdout.getvalue())
+        dataset = payload["countries"][0]["datasets"][0]
+        self.assertEqual(dataset["dataset"], "res_generation")
+        self.assertEqual(dataset["status"], "table_missing")
+        self.assertFalse(dataset["table_present"])
 
 
 class ChartQueryApiTest(TestCase):
