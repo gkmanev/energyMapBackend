@@ -9,6 +9,7 @@ cryptography==38.0.4
 pyOpenSSL==22.0.0
 redis==5.0.3
 djangorestframework
+djangorestframework-simplejwt
 drf-spectacular[sidecar]
 django-cors-headers
 django-filter==25.2

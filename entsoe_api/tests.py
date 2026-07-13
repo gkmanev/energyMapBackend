@@ -4,10 +4,12 @@ from io import StringIO
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.cache import cache
 from django.db import connection
 from django.test import SimpleTestCase, TestCase, override_settings
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from entsoe_api.conversation import load_history
 from entsoe_api.chart_query import ParsedDataQuery, parse_chart_query
@@ -31,6 +33,8 @@ from entsoe_api.models import (
     CountryWindSpeedPoint,
 )
 from entsoe_api.views import _parse_iso_utc_floor_hour, _partition_country_codes
+
+User = get_user_model()
 
 
 def _make_response(input_data: dict) -> MagicMock:
@@ -1022,3 +1026,96 @@ class ChartQueryApiTest(TestCase):
         self.assertEqual(payload["charts"], [])
         self.assertEqual(payload["text"], "Which country and what time range should I use?")
         self.assertTrue(payload["conversation_id"])
+
+
+class AuthApiTest(TestCase):
+    def test_register_returns_jwt_tokens_and_user(self):
+        response = self.client.post(
+            "/api/auth/register/",
+            data=json.dumps(
+                {
+                    "email": "newuser@example.com",
+                    "password": "StrongPassword123!",
+                    "first_name": "New",
+                    "last_name": "User",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(payload["user"]["email"], "newuser@example.com")
+        self.assertEqual(payload["user"]["first_name"], "New")
+        self.assertIn("access", payload)
+        self.assertIn("refresh", payload)
+        self.assertTrue(User.objects.filter(email="newuser@example.com", username="newuser@example.com").exists())
+
+    def test_register_rejects_duplicate_email(self):
+        User.objects.create_user(
+            username="existing@example.com",
+            email="existing@example.com",
+            password="StrongPassword123!",
+        )
+
+        response = self.client.post(
+            "/api/auth/register/",
+            data=json.dumps(
+                {
+                    "email": "existing@example.com",
+                    "password": "StrongPassword123!",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["email"], ["A user with this email already exists."])
+
+    def test_login_and_me_work_with_bearer_token(self):
+        User.objects.create_user(
+            username="viewer@example.com",
+            email="viewer@example.com",
+            password="StrongPassword123!",
+            first_name="View",
+        )
+
+        login_response = self.client.post(
+            "/api/auth/login/",
+            data=json.dumps(
+                {
+                    "email": "viewer@example.com",
+                    "password": "StrongPassword123!",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        login_payload = login_response.json()
+        self.assertEqual(login_response.status_code, 200)
+        self.assertIn("access", login_payload)
+
+        me_response = self.client.get(
+            "/api/auth/me/",
+            HTTP_AUTHORIZATION=f"Bearer {login_payload['access']}",
+        )
+
+        self.assertEqual(me_response.status_code, 200)
+        self.assertEqual(me_response.json()["email"], "viewer@example.com")
+
+    def test_refresh_returns_new_access_token(self):
+        user = User.objects.create_user(
+            username="refresh@example.com",
+            email="refresh@example.com",
+            password="StrongPassword123!",
+        )
+        refresh = RefreshToken.for_user(user)
+
+        response = self.client.post(
+            "/api/auth/refresh/",
+            data=json.dumps({"refresh": str(refresh)}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("access", response.json())

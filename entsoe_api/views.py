@@ -8,6 +8,7 @@ from collections import defaultdict
 from typing import Iterable, Tuple, Dict, List
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.decorators import method_decorator
@@ -18,9 +19,12 @@ from django.db.models.functions import TruncDay, TruncMonth, TruncYear
 from drf_spectacular.utils import OpenApiExample, extend_schema
 from rest_framework.views import APIView
 from rest_framework.decorators import api_view
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.reverse import reverse
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenRefreshView
 
 from .models import (
     Country,
@@ -34,13 +38,19 @@ from .models import (
     PhysicalFlow,
 )
 from entsoe_api.serializers import (
+    AuthUserSerializer,
     CountryGenerationForecastByTypeSerializer,
     CountryResGenerationByTypeSerializer,
     CountryTiltedIrradiancePointSerializer,
+    LoginSerializer,
     CountryWindSpeedPointSerializer,
     PhysicalFlowSerializer,
+    RegisterSerializer,
 )
 from .api_docs import (
+    AccessTokenResponseSerializer,
+    AuthSuccessResponseSerializer,
+    AuthUserResponseSerializer,
     AZIMUTH_PARAMETER,
     ApiRootResponseSerializer,
     BAD_REQUEST_RESPONSE,
@@ -59,6 +69,7 @@ from .api_docs import (
     GenerationRangeResponseSerializer,
     INVALID_COUNTRY_EXAMPLE,
     INVALID_RANGE_EXAMPLE,
+    LoginRequestSerializer,
     LOCAL_PARAMETER,
     MONTHLY_FLAG_PARAMETER,
     NEIGHBORS_PARAMETER,
@@ -68,6 +79,8 @@ from .api_docs import (
     PriceBulkResponseSerializer,
     PriceRangeResponseSerializer,
     psr_parameter,
+    RefreshRequestSerializer,
+    RegisterRequestSerializer,
     RESOLUTION_PARAMETER,
     ResGenerationResponseSerializer,
     START_PARAMETER,
@@ -81,6 +94,7 @@ from .agent import run_energy_agent
 from .conversation import append_turn, generate_conversation_id, load_history
 
 logger = logging.getLogger(__name__)
+User = get_user_model()
 
 
 # ──────────────────────────────── Utils / Helpers ───────────────────────────────
@@ -583,6 +597,10 @@ def _flow_field_names() -> Tuple[str, str, str]:
             "API root response",
             response_only=True,
             value={
+                "auth_register": "https://api.example.com/api/auth/register/",
+                "auth_login": "https://api.example.com/api/auth/login/",
+                "auth_refresh": "https://api.example.com/api/auth/refresh/",
+                "auth_me": "https://api.example.com/api/auth/me/",
                 "capacity_latest": "https://api.example.com/api/capacity/latest/",
                 "capacity_bulk_latest": "https://api.example.com/api/capacity/bulk-latest/",
                 "generation_yesterday": "https://api.example.com/api/generation/yesterday/",
@@ -609,6 +627,10 @@ def _flow_field_names() -> Tuple[str, str, str]:
 @api_view(["GET"])
 def api_root(request, format=None):
     return Response({
+        "auth_register": request.build_absolute_uri(reverse("auth-register")),
+        "auth_login": request.build_absolute_uri(reverse("auth-login")),
+        "auth_refresh": request.build_absolute_uri(reverse("token-refresh")),
+        "auth_me": request.build_absolute_uri(reverse("auth-me")),
         "capacity_latest": request.build_absolute_uri(reverse("capacity-latest")),
         "capacity_bulk_latest": request.build_absolute_uri(reverse("capacity-bulk-latest")),
         "generation_yesterday": request.build_absolute_uri(reverse("generation-yesterday")),
@@ -629,6 +651,109 @@ def api_root(request, format=None):
         "swagger_ui": request.build_absolute_uri(reverse("swagger-ui")),
         "redoc": request.build_absolute_uri(reverse("redoc")),
     })
+
+
+def _build_auth_response(user: User) -> dict:
+    refresh = RefreshToken.for_user(user)
+    return {
+        "user": AuthUserSerializer(user).data,
+        "access": str(refresh.access_token),
+        "refresh": str(refresh),
+    }
+
+
+class RegisterView(APIView):
+    @extend_schema(
+        tags=["Meta"],
+        summary="Register a user account",
+        description="Creates a new user using email and password, then returns a JWT access/refresh token pair.",
+        request=RegisterRequestSerializer,
+        responses={
+            201: AuthSuccessResponseSerializer,
+            400: BAD_REQUEST_RESPONSE,
+        },
+        examples=[
+            OpenApiExample(
+                "Register request",
+                request_only=True,
+                value={
+                    "email": "user@example.com",
+                    "password": "StrongPassword123!",
+                    "first_name": "Ada",
+                    "last_name": "Lovelace",
+                },
+            ),
+        ],
+    )
+    def post(self, request):
+        serializer = RegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=False)
+        if serializer.errors:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        user = serializer.save()
+        return Response(_build_auth_response(user), status=status.HTTP_201_CREATED)
+
+
+class LoginView(APIView):
+    @extend_schema(
+        tags=["Meta"],
+        summary="Log in with email and password",
+        description="Authenticates a user and returns a JWT access/refresh token pair.",
+        request=LoginRequestSerializer,
+        responses={
+            200: AuthSuccessResponseSerializer,
+            400: BAD_REQUEST_RESPONSE,
+        },
+        examples=[
+            OpenApiExample(
+                "Login request",
+                request_only=True,
+                value={
+                    "email": "user@example.com",
+                    "password": "StrongPassword123!",
+                },
+            ),
+        ],
+    )
+    def post(self, request):
+        serializer = LoginSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=False)
+        if serializer.errors:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(_build_auth_response(serializer.validated_data["user"]))
+
+
+class MeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Meta"],
+        summary="Return the current authenticated user",
+        description="Requires a Bearer access token.",
+        responses={
+            200: AuthUserResponseSerializer,
+            401: BAD_REQUEST_RESPONSE,
+        },
+    )
+    def get(self, request):
+        return Response(AuthUserSerializer(request.user).data)
+
+
+class AuthTokenRefreshView(TokenRefreshView):
+    @extend_schema(
+        tags=["Meta"],
+        summary="Refresh an access token",
+        description="Accepts a refresh token and returns a new access token.",
+        request=RefreshRequestSerializer,
+        responses={
+            200: AccessTokenResponseSerializer,
+            400: BAD_REQUEST_RESPONSE,
+        },
+    )
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
 
 
 class EnergyAgentChatView(APIView):

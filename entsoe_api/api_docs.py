@@ -194,6 +194,10 @@ NEIGHBORS_PARAMETER = OpenApiParameter(
 
 
 class ApiRootResponseSerializer(serializers.Serializer):
+    auth_register = serializers.URLField()
+    auth_login = serializers.URLField()
+    auth_refresh = serializers.URLField()
+    auth_me = serializers.URLField()
     capacity_latest = serializers.URLField()
     capacity_bulk_latest = serializers.URLField()
     generation_yesterday = serializers.URLField()
@@ -226,6 +230,44 @@ class ChartQueryRequestSerializer(serializers.Serializer):
             "from cache and uses them as context for follow-up messages."
         ),
     )
+
+
+class AuthUserResponseSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    email = serializers.EmailField()
+    first_name = serializers.CharField(allow_blank=True)
+    last_name = serializers.CharField(allow_blank=True)
+
+
+class RegisterRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField()
+    first_name = serializers.CharField(required=False, allow_blank=True)
+    last_name = serializers.CharField(required=False, allow_blank=True)
+
+
+class LoginRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField()
+
+
+class TokenPairResponseSerializer(serializers.Serializer):
+    access = serializers.CharField()
+    refresh = serializers.CharField()
+
+
+class AccessTokenResponseSerializer(serializers.Serializer):
+    access = serializers.CharField()
+
+
+class AuthSuccessResponseSerializer(serializers.Serializer):
+    user = AuthUserResponseSerializer()
+    access = serializers.CharField()
+    refresh = serializers.CharField()
+
+
+class RefreshRequestSerializer(serializers.Serializer):
+    refresh = serializers.CharField()
 
 
 class ChartQueryChartSerializer(serializers.Serializer):

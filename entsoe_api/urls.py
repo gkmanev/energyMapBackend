@@ -1,6 +1,7 @@
 # entsoe_api/urls.py
 from django.urls import path
 from .views import (
+    AuthTokenRefreshView,
     ChartQueryView,
     EnergyAgentChatView,
     CountryCapacityBulkLatestView,
@@ -16,13 +17,20 @@ from .views import (
     CountryGenerationYesterdayView,
     CountryPricesBulkRangeView,
     CountryPricesRangeView,
+    LoginView,
+    MeView,
     PhysicalFlowsLatestView,
     PhysicalFlowsRangeView,
+    RegisterView,
     api_root,
 )
 
 urlpatterns = [
     path("api/", api_root, name="api-root"),
+    path("api/auth/register/", RegisterView.as_view(), name="auth-register"),
+    path("api/auth/login/", LoginView.as_view(), name="auth-login"),
+    path("api/auth/refresh/", AuthTokenRefreshView.as_view(), name="token-refresh"),
+    path("api/auth/me/", MeView.as_view(), name="auth-me"),
     path("api/chat/", EnergyAgentChatView.as_view(), name="energy-chat"),
     path("api/chart-query/", ChartQueryView.as_view(), name="chart-query"),
     path("api/capacity/latest/", CountryCapacityLatestView.as_view(), name="capacity-latest"),
