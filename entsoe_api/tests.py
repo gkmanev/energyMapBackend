@@ -9,7 +9,7 @@ from django.core.cache import cache
 from django.db import connection
 from django.test import SimpleTestCase, TestCase, override_settings
 
-from entsoe_api.chart_conversation import load_chart_conversation
+from entsoe_api.conversation import load_history
 from entsoe_api.chart_query import ParsedDataQuery, parse_chart_query
 from entsoe_api.entsoe_data import EntsoeGenerationForecastByType
 from entsoe_api.helper import save_country_wind_speed_df
@@ -49,6 +49,28 @@ def _make_client_mock(input_data: dict) -> MagicMock:
     client = MagicMock()
     client.messages.create.return_value = _make_response(input_data)
     return client
+
+
+def _make_agent_tool_response(name: str, tool_input: dict, tool_id: str = "toolu_1") -> MagicMock:
+    tool_block = MagicMock()
+    tool_block.type = "tool_use"
+    tool_block.id = tool_id
+    tool_block.name = name
+    tool_block.input = tool_input
+    response = MagicMock()
+    response.content = [tool_block]
+    response.stop_reason = "tool_use"
+    return response
+
+
+def _make_agent_text_response(text: str) -> MagicMock:
+    text_block = MagicMock()
+    text_block.type = "text"
+    text_block.text = text
+    response = MagicMock()
+    response.content = [text_block]
+    response.stop_reason = "end_turn"
+    return response
 
 
 class GenerationForecastHelpersTest(SimpleTestCase):
@@ -812,345 +834,191 @@ class ChartQueryApiTest(TestCase):
             )
 
     @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
-    @patch("entsoe_api.chart_query.anthropic.Anthropic")
-    @patch("entsoe_api.views._now_utc")
-    def test_chart_query_returns_generation_and_price_panels(self, mock_now_utc, mock_anthropic):
-        mock_now_utc.return_value = dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc)
-        mock_anthropic.return_value = _make_client_mock({
-            "intent": "chart",
-            "country": "BG",
-            "countries": ["BG"],
-            "resolution": "d",
-            "generation_series": ["wind", "solar"],
-            "include_prices": True,
-            "timeframe": {"kind": "last_n_weeks", "amount": 2, "start_utc": None, "end_utc": None},
-        })
-
-        response = self.client.post(
-            "/api/chart-query/",
-            data=json.dumps({
-                "message": "Show the wind and solar generation for BG for the last two weeks daily resolution as well as the prices",
-            }),
-            content_type="application/json",
-        )
-
-        payload = response.json()
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(payload["status"], "ready")
-        self.assertEqual(payload["query"]["country"], "BG")
-        self.assertEqual(payload["query"]["countries"], ["BG"])
-        self.assertEqual(payload["query"]["start_utc"], "2026-04-15T00:00:00Z")
-        self.assertEqual(payload["query"]["end_utc"], "2026-04-29T00:00:00Z")
-        self.assertEqual(payload["query"]["generation_series"], ["wind", "solar"])
-
-        generation_panel = payload["panels"][0]
-        self.assertEqual(generation_panel["id"], "generation")
-        self.assertEqual(generation_panel["series"][0]["id"], "wind")
-        self.assertEqual(generation_panel["series"][0]["data"][0]["value"], 11.0)
-        self.assertEqual(generation_panel["series"][1]["id"], "solar")
-        self.assertEqual(generation_panel["series"][1]["data"][0]["value"], 12.0)
-
-        prices_panel = payload["panels"][1]
-        self.assertEqual(prices_panel["id"], "prices")
-        self.assertEqual(prices_panel["series"][0]["data"][0]["value"], 70.0)
-
-    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
-    @patch("entsoe_api.chart_query.anthropic.Anthropic")
-    @patch("entsoe_api.views._now_utc")
-    def test_chart_query_returns_multi_country_price_panel(self, mock_now_utc, mock_anthropic):
-        mock_now_utc.return_value = dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc)
-        mock_anthropic.return_value = _make_client_mock({
-            "intent": "chart",
-            "country": "BG",
-            "countries": ["BG", "RO"],
-            "resolution": "d",
-            "generation_series": [],
-            "include_prices": True,
-            "timeframe": {"kind": "last_n_weeks", "amount": 4, "start_utc": None, "end_utc": None},
-        })
-
-        response = self.client.post(
-            "/api/chart-query/",
-            data=json.dumps({
-                "message": "Compare the prices for BG and RO for the last month. Daily resolution",
-            }),
-            content_type="application/json",
-        )
-
-        payload = response.json()
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(payload["status"], "ready")
-        self.assertEqual(payload["query"]["country"], "BG")
-        self.assertEqual(payload["query"]["countries"], ["BG", "RO"])
-
-        prices_panel = payload["panels"][0]
-        self.assertEqual(prices_panel["id"], "prices")
-        self.assertEqual(prices_panel["title"], "BG vs RO day-ahead prices")
-        self.assertEqual([series["id"] for series in prices_panel["series"]], ["bg", "ro"])
-        self.assertEqual(prices_panel["series"][0]["data"][0]["value"], 70.0)
-        self.assertEqual(prices_panel["series"][1]["data"][0]["value"], 50.0)
-
-    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
-    @patch("entsoe_api.chart_query.anthropic.Anthropic")
-    @patch("entsoe_api.views._now_utc")
-    def test_chart_query_returns_multi_country_res_panel(self, mock_now_utc, mock_anthropic):
-        mock_now_utc.return_value = dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc)
-        mock_anthropic.return_value = _make_client_mock({
-            "intent": "chart",
-            "country": "BG",
-            "countries": ["BG", "RO"],
-            "resolution": "d",
-            "generation_series": ["res"],
-            "include_prices": False,
-            "timeframe": {"kind": "last_n_weeks", "amount": 4, "start_utc": None, "end_utc": None},
-        })
-
-        response = self.client.post(
-            "/api/chart-query/",
-            data=json.dumps({
-                "message": "Compare the RES generation for BG and RO last month",
-            }),
-            content_type="application/json",
-        )
-
-        payload = response.json()
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(payload["status"], "ready")
-        self.assertEqual(payload["query"]["generation_series"], ["res"])
-
-        generation_panel = payload["panels"][0]
-        self.assertEqual(generation_panel["id"], "generation")
-        self.assertEqual(generation_panel["title"], "BG vs RO renewable generation")
-        self.assertEqual([series["id"] for series in generation_panel["series"]], ["bg_res", "ro_res"])
-        self.assertEqual(generation_panel["series"][0]["name"], "BG RES (solar + wind)")
-        self.assertEqual(generation_panel["series"][0]["data"][0]["value"], 22.0)
-        self.assertEqual(generation_panel["series"][1]["data"][0]["value"], 17.0)
-
-    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
-    @patch("entsoe_api.chart_query.anthropic.Anthropic")
-    @patch("entsoe_api.views._now_utc")
-    def test_chart_query_follow_up_can_switch_to_bar_chart(self, mock_now_utc, mock_anthropic):
-        mock_now_utc.return_value = dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc)
-        mock_anthropic.return_value = _make_client_mock({
-            "intent": "chart",
-            "country": "",
-            "countries": [],
-            "resolution": "native",
-            "generation_series": [],
-            "include_prices": False,
-            "chart_type": "bar",
-            "timeframe": {"kind": "today", "amount": None, "start_utc": None, "end_utc": None},
-        })
-
-        response = self.client.post(
-            "/api/chart-query/",
-            data=json.dumps({
-                "message": "can you make it as bar chart",
-                "previous_query": {
-                    "country": "BG",
+    @patch("entsoe_api.agent.anthropic.Anthropic")
+    def test_chart_query_returns_chart_specs(self, mock_anthropic):
+        client = MagicMock()
+        client.messages.create.side_effect = [
+            _make_agent_tool_response(
+                "render_chart",
+                {
+                    "title": "BG vs RO renewable generation",
+                    "data_type": "generation_res",
                     "countries": ["BG", "RO"],
-                    "start_utc": "2026-04-01T00:00:00Z",
-                    "end_utc": "2026-04-29T00:00:00Z",
-                    "resolution": "d",
-                    "time_phrase": "last 4 weeks at daily resolution",
-                    "generation_series": ["res"],
+                    "series": ["res"],
                     "include_prices": False,
+                    "start_utc": "2026-04-01T00:00:00Z",
+                    "end_utc": "2026-04-30T00:00:00Z",
+                    "resolution": "d",
                     "chart_type": "line",
                 },
-            }),
-            content_type="application/json",
-        )
-
-        payload = response.json()
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(payload["status"], "ready")
-        self.assertEqual(payload["query"]["chart_type"], "bar")
-        self.assertEqual(payload["query"]["countries"], ["BG", "RO"])
-        self.assertEqual(payload["query"]["generation_series"], ["res"])
-        self.assertEqual(payload["panels"][0]["type"], "bar")
-        self.assertIn("bar chart", payload["assistant_message"])
-
-    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
-    @patch("entsoe_api.chart_query.anthropic.Anthropic")
-    @patch("entsoe_api.views._now_utc")
-    def test_chart_query_uses_explicit_message_details_when_model_output_is_stale(self, mock_now_utc, mock_anthropic):
-        mock_now_utc.return_value = dt.datetime(2026, 4, 30, 13, 0, tzinfo=dt.timezone.utc)
-        mock_anthropic.return_value = _make_client_mock({
-            "intent": "chart",
-            "country": "BG",
-            "countries": ["BG"],
-            "resolution": "d",
-            "generation_series": ["wind", "solar"],
-            "include_prices": True,
-            "timeframe": {"kind": "last_n_weeks", "amount": 2, "start_utc": None, "end_utc": None},
-        })
+            ),
+            _make_agent_text_response("Showing RES generation for BG and RO for April as a line chart."),
+        ]
+        mock_anthropic.return_value = client
 
         response = self.client.post(
             "/api/chart-query/",
-            data=json.dumps({
-                "message": "Compare res generation for BG and RO for April. Daily resolution",
-            }),
+            data=json.dumps({"message": "Compare RES generation for BG and RO for April. Daily resolution"}),
             content_type="application/json",
         )
 
         payload = response.json()
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(payload["status"], "ready")
-        self.assertEqual(payload["query"]["countries"], ["BG", "RO"])
-        self.assertEqual(payload["query"]["generation_series"], ["res"])
-        self.assertFalse(payload["query"]["include_prices"])
-        self.assertEqual(payload["query"]["start_utc"], "2026-04-01T00:00:00Z")
-        self.assertEqual(payload["query"]["end_utc"], "2026-04-30T00:00:00Z")
-        self.assertEqual(payload["panels"][0]["title"], "BG vs RO renewable generation")
-        self.assertEqual([series["id"] for series in payload["panels"][0]["series"]], ["bg_res", "ro_res"])
+        self.assertEqual(payload["status"], "chart")
+        self.assertEqual(payload["text"], "Showing RES generation for BG and RO for April as a line chart.")
+        self.assertEqual(len(payload["charts"]), 1)
+        self.assertEqual(payload["charts"][0]["data_type"], "generation_res")
+        self.assertEqual(payload["charts"][0]["countries"], ["BG", "RO"])
+        self.assertEqual(payload["charts"][0]["series"], ["res"])
+        self.assertEqual(payload["charts"][0]["resolution"], "d")
 
-    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
-    @patch("entsoe_api.chart_query.anthropic.Anthropic")
-    @patch("entsoe_api.views._now_utc")
-    def test_chart_query_returns_clarifying_question_when_request_is_ambiguous(self, mock_now_utc, mock_anthropic):
-        mock_now_utc.return_value = dt.datetime(2026, 4, 30, 13, 0, tzinfo=dt.timezone.utc)
-        mock_anthropic.return_value = _make_client_mock({
-            "intent": "needs_clarification",
-            "clarifying_question": "Which country and what time range should I use for the chart?",
-            "missing_fields": ["country", "timeframe"],
-            "country": "",
-            "countries": [],
-            "resolution": "native",
-            "generation_series": [],
-            "include_prices": True,
-            "chart_type": "line",
-            "timeframe": {"kind": "unknown", "amount": None, "start_utc": None, "end_utc": None},
-        })
+    @override_settings(
+        ANTHROPIC_API_KEY="test-key",
+        CLAUDE_CHAT_MODEL="claude-sonnet-4-6",
+        ENTSOE_PRICE_COUNTRY_TO_EICS={"BG": "bg", "RO": "ro"},
+    )
+    @patch("entsoe_api.agent.anthropic.Anthropic")
+    def test_chart_query_fetches_data_via_tool_for_text_answer(self, mock_anthropic):
+        client = MagicMock()
+        client.messages.create.side_effect = [
+            _make_agent_tool_response(
+                "get_day_ahead_prices",
+                {
+                    "countries": ["BG"],
+                    "start_utc": "2026-04-15T00:00:00Z",
+                    "end_utc": "2026-04-17T00:00:00Z",
+                    "resolution": "d",
+                },
+            ),
+            _make_agent_text_response("BG average day-ahead price was 80.0 EUR/MWh over the requested window."),
+        ]
+        mock_anthropic.return_value = client
 
         response = self.client.post(
             "/api/chart-query/",
-            data=json.dumps({
-                "message": "Show me the prices",
-            }),
+            data=json.dumps({"message": "What was the average price in BG for the last two days?"}),
             content_type="application/json",
         )
 
         payload = response.json()
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(payload["status"], "needs_clarification")
-        self.assertIsNone(payload["query"])
-        self.assertEqual(payload["clarifying_question"], "Which country and what time range should I use for the chart?")
-        self.assertEqual(payload["clarification"]["missing_fields"], ["country", "timeframe"])
-        self.assertEqual(payload["panels"], [])
-        self.assertTrue(payload["conversation_id"])
+        self.assertEqual(payload["status"], "text")
+        self.assertEqual(payload["charts"], [])
+        self.assertIn("80.0 EUR/MWh", payload["text"])
+
+        second_call_messages = client.messages.create.call_args_list[1].kwargs["messages"]
+        tool_result_message = next(
+            message
+            for message in reversed(second_call_messages)
+            if message["role"] == "user"
+            and isinstance(message["content"], list)
+            and message["content"]
+            and message["content"][0]["type"] == "tool_result"
+        )
+        self.assertEqual(tool_result_message["role"], "user")
+        tool_result_payload = json.loads(tool_result_message["content"][0]["content"])
+        self.assertEqual(tool_result_payload["row_count"], 2)
+        self.assertEqual(tool_result_payload["rows"][0]["price_eur_mwh"], 70.0)
+        self.assertEqual(tool_result_payload["rows"][1]["price_eur_mwh"], 100.0)
 
     @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
-    @patch("entsoe_api.chart_query.anthropic.Anthropic")
-    @patch("entsoe_api.views._now_utc")
-    def test_chart_query_reuses_redis_conversation_context_for_follow_up(self, mock_now_utc, mock_anthropic):
-        mock_now_utc.return_value = dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc)
-        mock_client = MagicMock()
-        mock_anthropic.return_value = mock_client
-        mock_client.messages.create.side_effect = [
-            _make_response({
-                "intent": "chart",
-                "country": "BG",
-                "countries": ["BG", "RO"],
-                "resolution": "d",
-                "generation_series": ["res"],
-                "include_prices": False,
-                "chart_type": "line",
-                "timeframe": {"kind": "last_n_weeks", "amount": 4, "start_utc": None, "end_utc": None},
-            }),
-            _make_response({
-                "intent": "chart",
-                "country": "",
-                "countries": [],
-                "resolution": "native",
-                "generation_series": [],
-                "include_prices": False,
-                "chart_type": "bar",
-                "timeframe": {"kind": "today", "amount": None, "start_utc": None, "end_utc": None},
-            }),
+    @patch("entsoe_api.agent.anthropic.Anthropic")
+    def test_chart_query_reuses_raw_conversation_history_for_follow_up(self, mock_anthropic):
+        first_client = MagicMock()
+        first_client.messages.create.side_effect = [
+            _make_agent_tool_response(
+                "render_chart",
+                {
+                    "title": "BG vs RO renewable generation",
+                    "data_type": "generation_res",
+                    "countries": ["BG", "RO"],
+                    "series": ["res"],
+                    "include_prices": False,
+                    "start_utc": "2026-04-01T00:00:00Z",
+                    "end_utc": "2026-04-30T00:00:00Z",
+                    "resolution": "d",
+                    "chart_type": "line",
+                },
+                tool_id="toolu_first",
+            ),
+            _make_agent_text_response("Showing RES generation for BG and RO for April as a line chart."),
         ]
 
-        first_response = self.client.post(
-            "/api/chart-query/",
-            data=json.dumps({
-                "message": "Compare the RES generation for BG and RO last month",
-            }),
-            content_type="application/json",
-        )
-        first_payload = first_response.json()
-        conversation_id = first_payload["conversation_id"]
-
-        second_response = self.client.post(
-            "/api/chart-query/",
-            data=json.dumps({
-                "message": "can you make it as bar chart",
-                "conversation_id": conversation_id,
-            }),
-            content_type="application/json",
-        )
-
-        second_payload = second_response.json()
-        self.assertEqual(second_response.status_code, 200)
-        self.assertEqual(second_payload["status"], "ready")
-        self.assertEqual(second_payload["conversation_id"], conversation_id)
-        self.assertEqual(second_payload["query"]["chart_type"], "bar")
-        self.assertEqual(second_payload["query"]["countries"], ["BG", "RO"])
-        self.assertEqual(second_payload["query"]["generation_series"], ["res"])
-
-        conversation = load_chart_conversation(conversation_id)
-        self.assertIsNotNone(conversation)
-        self.assertEqual(len(conversation["messages"]), 4)
-        self.assertEqual(conversation["previous_query"]["chart_type"], "bar")
-
-    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
-    @patch("entsoe_api.chart_query.anthropic.Anthropic")
-    @patch("entsoe_api.views._now_utc")
-    def test_chart_query_data_intent_fetches_data_and_calls_claude_for_analysis(self, mock_now_utc, mock_anthropic):
-        mock_now_utc.return_value = dt.datetime(2026, 4, 29, 13, 0, tzinfo=dt.timezone.utc)
-
-        # First Anthropic() instance → classification call (tool use)
-        first_client = _make_client_mock({
-            "intent": "data",
-            "data_type": "prices",
-            "country": "BG",
-            "countries": ["BG"],
-            "resolution": "native",
-            "generation_series": [],
-            "include_prices": True,
-            "chart_type": "line",
-            "timeframe": {"kind": "last_n_weeks", "amount": 2, "start_utc": None, "end_utc": None},
-            "text_answer": None,
-            "clarifying_question": None,
-            "missing_fields": [],
-            "country_from": None,
-            "country_to": None,
-        })
-
-        # Second Anthropic() instance → data analysis call (plain text)
-        analysis_text_block = MagicMock()
-        analysis_text_block.type = "text"
-        analysis_text_block.text = "BG: avg 80.00 EUR/MWh, max 100.00, min 60.00 for last 2 weeks (3 data points)."
         second_client = MagicMock()
-        second_client.messages.create.return_value = MagicMock(content=[analysis_text_block])
+        second_client.messages.create.side_effect = [
+            _make_agent_tool_response(
+                "render_chart",
+                {
+                    "title": "BG vs RO renewable generation",
+                    "data_type": "generation_res",
+                    "countries": ["BG", "RO"],
+                    "series": ["res"],
+                    "include_prices": False,
+                    "start_utc": "2026-04-01T00:00:00Z",
+                    "end_utc": "2026-04-30T00:00:00Z",
+                    "resolution": "d",
+                    "chart_type": "bar",
+                },
+                tool_id="toolu_second",
+            ),
+            _make_agent_text_response("Switched it to a bar chart."),
+        ]
 
         mock_anthropic.side_effect = [first_client, second_client]
 
+        first_response = self.client.post(
+            "/api/chart-query/",
+            data=json.dumps({"message": "Compare the RES generation for BG and RO last month"}),
+            content_type="application/json",
+        )
+        conversation_id = first_response.json()["conversation_id"]
+
+        second_response = self.client.post(
+            "/api/chart-query/",
+            data=json.dumps(
+                {
+                    "message": "make it a bar chart",
+                    "conversation_id": conversation_id,
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = second_response.json()
+        self.assertEqual(second_response.status_code, 200)
+        self.assertEqual(payload["status"], "chart")
+        self.assertEqual(payload["charts"][0]["chart_type"], "bar")
+        self.assertEqual(payload["conversation_id"], conversation_id)
+
+        second_request_messages = second_client.messages.create.call_args_list[0].kwargs["messages"]
+        self.assertEqual(second_request_messages[0]["role"], "user")
+        self.assertEqual(second_request_messages[1]["role"], "assistant")
+        self.assertEqual(second_request_messages[1]["content"][0]["type"], "tool_use")
+        self.assertEqual(second_request_messages[2]["role"], "user")
+        self.assertEqual(second_request_messages[2]["content"][0]["type"], "tool_result")
+
+        history = load_history(conversation_id)
+        self.assertEqual(len(history), 8)
+        self.assertEqual(history[1]["content"][0]["name"], "render_chart")
+
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.agent.anthropic.Anthropic")
+    def test_chart_query_returns_text_for_clarification(self, mock_anthropic):
+        client = MagicMock()
+        client.messages.create.return_value = _make_agent_text_response(
+            "Which country and what time range should I use?"
+        )
+        mock_anthropic.return_value = client
+
         response = self.client.post(
             "/api/chart-query/",
-            data=json.dumps({
-                "message": "What is the average price in BG for the last two weeks?",
-            }),
+            data=json.dumps({"message": "Show me the prices"}),
             content_type="application/json",
         )
 
         payload = response.json()
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(payload["status"], "data")
-        self.assertIsNone(payload["query"])
-        self.assertEqual(payload["panels"], [])
-        self.assertIn("80.00", payload["text_answer"])
-        self.assertIn("EUR/MWh", payload["text_answer"])
-        # Verify the second Claude call received the fetched DB data
-        analysis_call_kwargs = second_client.messages.create.call_args.kwargs
-        user_msg = analysis_call_kwargs["messages"][0]["content"]
-        self.assertIn("BG", user_msg)
-        self.assertIn("EUR/MWh", user_msg)
+        self.assertEqual(payload["status"], "text")
+        self.assertEqual(payload["charts"], [])
+        self.assertEqual(payload["text"], "Which country and what time range should I use?")
+        self.assertTrue(payload["conversation_id"])

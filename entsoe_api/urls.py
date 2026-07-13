@@ -2,6 +2,7 @@
 from django.urls import path
 from .views import (
     ChartQueryView,
+    EnergyAgentChatView,
     CountryCapacityBulkLatestView,
     CountryCapacityLatestView,
     CountryGenerationBulkRangeView,
@@ -22,6 +23,7 @@ from .views import (
 
 urlpatterns = [
     path("api/", api_root, name="api-root"),
+    path("api/chat/", EnergyAgentChatView.as_view(), name="energy-chat"),
     path("api/chart-query/", ChartQueryView.as_view(), name="chart-query"),
     path("api/capacity/latest/", CountryCapacityLatestView.as_view(), name="capacity-latest"),
     path("api/capacity/bulk-latest/", CountryCapacityBulkLatestView.as_view(), name="capacity-bulk-latest"),

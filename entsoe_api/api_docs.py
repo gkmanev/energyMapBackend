@@ -217,72 +217,36 @@ class ApiRootResponseSerializer(serializers.Serializer):
 
 class ChartQueryRequestSerializer(serializers.Serializer):
     message = serializers.CharField(
-        help_text="Simple text query, for example 'Show the wind and solar generation for BG for the last two weeks daily resolution as well as the prices'."
+        help_text="Simple text query, for example 'Show RES generation for BG for the last 7 days'."
     )
     conversation_id = serializers.CharField(
         required=False,
         help_text=(
-            "Optional conversation identifier. When provided, the backend loads prior chart-query turns "
-            "from Redis and uses them as context for follow-up messages."
-        ),
-    )
-    previous_query = serializers.JSONField(
-        required=False,
-        help_text=(
-            "Optional prior query metadata from the previous chart-query response. "
-            "This is mainly for stateless clients; conversation_id is preferred for follow-ups."
+            "Optional conversation identifier. When provided, the backend loads prior agent turns "
+            "from cache and uses them as context for follow-up messages."
         ),
     )
 
 
-class ChartQueryPointSerializer(serializers.Serializer):
-    datetime_utc = serializers.DateTimeField()
-    value = serializers.FloatField(allow_null=True)
-
-
-class ChartQuerySeriesSerializer(serializers.Serializer):
-    id = serializers.CharField()
-    name = serializers.CharField()
-    unit = serializers.CharField()
-    data = ChartQueryPointSerializer(many=True)
-
-
-class ChartQueryPanelSerializer(serializers.Serializer):
-    id = serializers.CharField()
-    title = serializers.CharField()
-    type = serializers.CharField()
-    x_key = serializers.CharField()
-    unit = serializers.CharField()
-    series = ChartQuerySeriesSerializer(many=True)
-
-
-class ChartQueryMetadataSerializer(serializers.Serializer):
-    original_message = serializers.CharField()
-    country = serializers.CharField()
+class ChartQueryChartSerializer(serializers.Serializer):
+    title = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    data_type = serializers.CharField()
     countries = serializers.ListField(child=serializers.CharField())
+    series = serializers.ListField(child=serializers.CharField())
+    include_prices = serializers.BooleanField()
     start_utc = serializers.DateTimeField()
     end_utc = serializers.DateTimeField()
-    resolution = serializers.CharField(allow_blank=True)
-    time_phrase = serializers.CharField()
-    generation_series = serializers.ListField(child=serializers.CharField())
-    include_prices = serializers.BooleanField()
+    resolution = serializers.CharField()
     chart_type = serializers.CharField()
-
-
-class ChartQueryClarificationSerializer(serializers.Serializer):
-    original_message = serializers.CharField()
-    question = serializers.CharField()
-    missing_fields = serializers.ListField(child=serializers.CharField())
+    country_from = serializers.CharField(required=False, allow_blank=True)
+    country_to = serializers.CharField(required=False, allow_blank=True)
 
 
 class ChartQueryResponseSerializer(serializers.Serializer):
     conversation_id = serializers.CharField()
-    status = serializers.ChoiceField(choices=["ready", "needs_clarification"])
-    query = ChartQueryMetadataSerializer(required=False, allow_null=True)
-    assistant_message = serializers.CharField()
-    clarifying_question = serializers.CharField(required=False, allow_blank=True, allow_null=True)
-    clarification = ChartQueryClarificationSerializer(required=False, allow_null=True)
-    panels = ChartQueryPanelSerializer(many=True)
+    status = serializers.ChoiceField(choices=["chart", "text"])
+    text = serializers.CharField()
+    charts = ChartQueryChartSerializer(many=True)
 
 
 class CapacityItemSerializer(serializers.Serializer):

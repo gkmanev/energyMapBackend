@@ -77,19 +77,8 @@ from .api_docs import (
     WindSpeedBulkResponseSerializer,
     WindSpeedResponseSerializer,
 )
-from .chart_conversation import (
-    append_chart_conversation_turn,
-    conversation_messages_for_model,
-    generate_conversation_id,
-    load_chart_conversation,
-)
-from .chart_query import (
-    ParsedChartQuery,
-    ParsedDataQuery,
-    build_data_description,
-    call_claude_for_data_analysis,
-    parse_chart_query,
-)
+from .agent import run_energy_agent
+from .conversation import append_turn, generate_conversation_id, load_history
 
 logger = logging.getLogger(__name__)
 
@@ -642,90 +631,58 @@ def api_root(request, format=None):
     })
 
 
-class ChartQueryView(APIView):
+class EnergyAgentChatView(APIView):
     @extend_schema(
         tags=["Meta"],
-        summary="Parse a simple chart query",
+        summary="Chat with the energy agent",
         description=(
-            "Accepts a constrained natural-language request, maps it to known metrics, "
-            "queries the database, and returns chart-ready JSON panels. "
-            "If the request is ambiguous or underspecified, it returns a clarifying question instead. "
-            "The first version supports RES (solar + wind), solar generation, wind generation, and day-ahead prices."
+            "Accepts a natural-language message, runs the multi-step energy agent, "
+            "and returns either plain text or one or more chart specs."
         ),
         request=ChartQueryRequestSerializer,
         responses={
             200: ChartQueryResponseSerializer,
             400: BAD_REQUEST_RESPONSE,
+            502: BAD_REQUEST_RESPONSE,
         },
         examples=[
             OpenApiExample(
-                "Chart query request",
+                "Chat request",
                 value={
                     "message": "Compare RES generation for BG and RO for April. Daily resolution",
                 },
                 request_only=True,
             ),
             OpenApiExample(
-                "Chart query response",
+                "Chart response",
                 response_only=True,
                 value={
                     "conversation_id": "7d4d9300-4a6f-44be-b59f-7c648cc44062",
-                    "status": "ready",
-                    "query": {
-                        "original_message": "Compare RES generation for BG and RO for April. Daily resolution",
-                        "country": "BG",
-                        "countries": ["BG", "RO"],
-                        "start_utc": "2026-04-01T00:00:00Z",
-                        "end_utc": "2026-04-30T00:00:00Z",
-                        "resolution": "d",
-                        "time_phrase": "April at daily resolution",
-                        "generation_series": ["res"],
-                        "include_prices": False,
-                        "chart_type": "line",
-                    },
-                    "assistant_message": "Showing RES generation for BG and RO for April at daily resolution as a line chart.",
-                    "clarifying_question": None,
-                    "clarification": None,
-                    "panels": [
+                    "status": "chart",
+                    "text": "Showing RES generation for BG and RO for April as a line chart.",
+                    "charts": [
                         {
-                            "id": "generation",
                             "title": "BG vs RO renewable generation",
-                            "type": "line",
-                            "x_key": "datetime_utc",
-                            "unit": "MW",
-                            "series": [
-                                {
-                                    "id": "bg_res",
-                                    "name": "BG RES (solar + wind)",
-                                    "unit": "MW",
-                                    "data": [{"datetime_utc": "2026-04-01T00:00:00Z", "value": 22.0}],
-                                },
-                                {
-                                    "id": "ro_res",
-                                    "name": "RO RES (solar + wind)",
-                                    "unit": "MW",
-                                    "data": [{"datetime_utc": "2026-04-01T00:00:00Z", "value": 17.0}],
-                                }
-                            ],
-                        },
+                            "data_type": "generation_res",
+                            "countries": ["BG", "RO"],
+                            "series": ["res"],
+                            "include_prices": False,
+                            "start_utc": "2026-04-01T00:00:00Z",
+                            "end_utc": "2026-04-30T00:00:00Z",
+                            "resolution": "d",
+                            "chart_type": "line",
+                        }
                     ],
                 },
             ),
             OpenApiExample(
-                "Clarification response",
+                "Text response",
                 response_only=True,
                 value={
                     "conversation_id": "7d4d9300-4a6f-44be-b59f-7c648cc44062",
-                    "status": "needs_clarification",
-                    "query": None,
-                    "assistant_message": "Which country and what time range should I use for the chart?",
-                    "clarifying_question": "Which country and what time range should I use for the chart?",
-                    "clarification": {
-                        "original_message": "Show me the prices",
-                        "question": "Which country and what time range should I use for the chart?",
-                        "missing_fields": ["country", "timeframe"],
-                    },
-                    "panels": [],
+                    "status": "text",
+                    "text": "Which country and what time range should I use?",
+                    "charts": [],
                 },
             ),
         ],
@@ -734,172 +691,43 @@ class ChartQueryView(APIView):
         serializer = ChartQueryRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=False)
         if serializer.errors:
-            return Response(serializer.errors, status=400)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        requested_conversation_id = str(serializer.validated_data.get("conversation_id", "")).strip()
-        conversation_id = requested_conversation_id or generate_conversation_id()
-        conversation = load_chart_conversation(requested_conversation_id)
-        conversation_previous_query = None
-        conversation_pending_clarification = None
-        if isinstance(conversation, dict):
-            raw_previous_query = conversation.get("previous_query")
-            if isinstance(raw_previous_query, dict):
-                conversation_previous_query = raw_previous_query
-            raw_pending_clarification = conversation.get("pending_clarification")
-            if isinstance(raw_pending_clarification, dict):
-                conversation_pending_clarification = raw_pending_clarification
+        message = str(serializer.validated_data.get("message") or "").strip()
+        if not message:
+            return Response(
+                {"error": "message is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        previous_query = serializer.validated_data.get("previous_query") or conversation_previous_query
+        conversation_id = (
+            str(serializer.validated_data.get("conversation_id") or "").strip()
+            or generate_conversation_id()
+        )
+        history = load_history(conversation_id)
 
         try:
-            result = parse_chart_query(
-                serializer.validated_data["message"],
-                now_utc=_now_utc(),
-                previous_query=previous_query,
-                conversation_messages=conversation_messages_for_model(conversation),
-                pending_clarification=conversation_pending_clarification,
+            result = run_energy_agent(
+                message,
+                history=history,
+                now_utc=dt.datetime.now(dt.timezone.utc),
             )
-        except ValueError as e:
-            return Response({"detail": str(e)}, status=400)
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
-        if result.status == "text":
-            text_answer = result.text_answer or ""
-            append_chart_conversation_turn(
-                conversation_id,
-                user_message=serializer.validated_data["message"],
-                assistant_message=text_answer,
-                status="text",
-                previous_query=previous_query,
-                pending_clarification=None,
-            )
-            return Response(
-                {
-                    "conversation_id": conversation_id,
-                    "status": "text",
-                    "query": None,
-                    "assistant_message": text_answer,
-                    "text_answer": text_answer,
-                    "clarifying_question": None,
-                    "clarification": None,
-                    "panels": [],
-                },
-                status=200,
-            )
-
-        if result.status == "data":
-            data_query = result.query  # ParsedDataQuery
-            _validate_countries_or_400(data_query.countries)
-
-            if data_query.data_type == "prices":
-                data_rows = _fetch_price_data_for_analysis(data_query)
-            elif data_query.data_type == "capacity":
-                data_rows = _fetch_capacity_data_for_analysis(data_query)
-            else:  # generation_res
-                data_rows = _fetch_generation_data_for_analysis(data_query)
-
-            text_answer = call_claude_for_data_analysis(
-                data_query.original_message,
-                data_rows,
-                data_description=build_data_description(data_query),
-            )
-            append_chart_conversation_turn(
-                conversation_id,
-                user_message=serializer.validated_data["message"],
-                assistant_message=text_answer,
-                status="data",
-                previous_query=previous_query,
-                pending_clarification=None,
-            )
-            return Response(
-                {
-                    "conversation_id": conversation_id,
-                    "status": "data",
-                    "query": None,
-                    "assistant_message": text_answer,
-                    "text_answer": text_answer,
-                    "clarifying_question": None,
-                    "clarification": None,
-                    "panels": [],
-                },
-                status=200,
-            )
-
-        if result.status == "needs_clarification":
-            clarification = result.clarification
-            append_chart_conversation_turn(
-                conversation_id,
-                user_message=serializer.validated_data["message"],
-                assistant_message=clarification.question,
-                status="needs_clarification",
-                previous_query=previous_query,
-                pending_clarification={
-                    "question": clarification.question,
-                    "missing_fields": clarification.missing_fields,
-                },
-            )
-            return Response(
-                {
-                    "conversation_id": conversation_id,
-                    "status": "needs_clarification",
-                    "query": None,
-                    "assistant_message": clarification.question,
-                    "clarifying_question": clarification.question,
-                    "clarification": {
-                        "original_message": clarification.original_message,
-                        "question": clarification.question,
-                        "missing_fields": clarification.missing_fields,
-                    },
-                    "panels": [],
-                },
-                status=200,
-            )
-
-        query = result.query
-        if query is None:
-            return Response({"detail": "Chat query result did not include a parsed query."}, status=400)
-
-        _validate_countries_or_400(query.countries)
-
-        panels: list[dict] = []
-        if query.generation_series:
-            panels.append(_build_generation_chart_panel(query))
-        if query.include_prices:
-            panels.append(_build_price_chart_panel(query))
-
-        query_payload = {
-            "original_message": query.original_message,
-            "country": query.country,
-            "countries": query.countries,
-            "start_utc": _fmt_z(query.start_utc),
-            "end_utc": _fmt_z(query.end_utc),
-            "resolution": query.resolution,
-            "time_phrase": query.time_phrase,
-            "generation_series": query.generation_series,
-            "include_prices": query.include_prices,
-            "chart_type": query.chart_type,
-        }
-        assistant_message = _describe_chart_query(query)
-        append_chart_conversation_turn(
-            conversation_id,
-            user_message=serializer.validated_data["message"],
-            assistant_message=assistant_message,
-            status="ready",
-            previous_query=query_payload,
-            pending_clarification=None,
-        )
+        append_turn(conversation_id, result.new_messages)
 
         return Response(
             {
                 "conversation_id": conversation_id,
-                "status": "ready",
-                "query": query_payload,
-                "assistant_message": assistant_message,
-                "clarifying_question": None,
-                "clarification": None,
-                "panels": panels,
-            },
-            status=200,
+                "status": result.status,
+                "text": result.text,
+                "charts": result.charts,
+            }
         )
+
+
+ChartQueryView = EnergyAgentChatView
 
 
 # ─────────────────────────── Capacity (latest year) ────────────────────────────
