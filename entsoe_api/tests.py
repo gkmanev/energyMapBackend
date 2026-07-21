@@ -1060,7 +1060,8 @@ class AuthApiTest(TestCase):
         self.client.post("/api/auth/register/", data=json.dumps({"email": "newuser@example.com", "password": "StrongPassword123!"}), content_type="application/json")
         url = mock_post.call_args.kwargs["json"]["html"].split('href="')[1].split('"')[0]
         activation_response = self.client.get(url.replace("http://127.0.0.1:8000", ""))
-        self.assertEqual(activation_response.status_code, 200)
+        self.assertEqual(activation_response.status_code, 302)
+        self.assertEqual(activation_response["Location"], "https://visualize.energy/login?activated=1")
         self.assertTrue(User.objects.get(email="newuser@example.com").is_active)
 
     def test_register_rejects_duplicate_email(self):

@@ -6,6 +6,7 @@ import logging
 import time
 from collections import defaultdict
 from typing import Iterable, Tuple, Dict, List
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -16,6 +17,7 @@ from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.decorators import method_decorator
 from django.utils.timezone import get_default_timezone
 from django.views.decorators.cache import cache_page
+from django.shortcuts import redirect
 from django.db.models import Avg, Count, Max, Min, Q
 from django.db.models.functions import TruncDay, TruncMonth, TruncYear
 from drf_spectacular.utils import OpenApiExample, extend_schema
@@ -756,7 +758,8 @@ class ActivateAccountView(APIView):
 
         user.is_active = True
         user.save(update_fields=["is_active"])
-        return Response({"detail": "Your account is active. You can now log in."})
+        frontend_url = settings.FRONTEND_PUBLIC_URL.rstrip("/")
+        return redirect(f"{frontend_url}/login?{urlencode({'activated': '1'})}")
 
 
 class MeView(APIView):
