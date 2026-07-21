@@ -128,6 +128,12 @@ SIMPLE_JWT = {
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
+# Resend email verification. Use a verified Resend domain for the sender address.
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "")
+API_PUBLIC_URL = os.getenv("API_PUBLIC_URL", "http://127.0.0.1:8000")
+PASSWORD_RESET_TIMEOUT = int(os.getenv("ACTIVATION_LINK_TTL_SECONDS", str(60 * 60 * 24 * 3)))
+
 SPECTACULAR_SETTINGS = {
     "TITLE": "visualize.energy Platform Data API",
     "DESCRIPTION": (

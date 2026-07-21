@@ -10,6 +10,8 @@ from typing import Iterable, Tuple, Dict, List
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.utils.encoding import force_str
+from django.utils.http import urlsafe_base64_decode
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.decorators import method_decorator
 from django.utils.timezone import get_default_timezone
@@ -49,6 +51,7 @@ from entsoe_api.serializers import (
 )
 from .api_docs import (
     AccessTokenResponseSerializer,
+    ActivationPendingResponseSerializer,
     AuthSuccessResponseSerializer,
     AuthUserResponseSerializer,
     AZIMUTH_PARAMETER,
@@ -92,6 +95,7 @@ from .api_docs import (
 )
 from .agent import run_energy_agent
 from .conversation import append_turn, generate_conversation_id, load_history
+from .email_activation import activation_token_generator, send_activation_email
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -666,11 +670,12 @@ class RegisterView(APIView):
     @extend_schema(
         tags=["Meta"],
         summary="Register a user account",
-        description="Creates a new user using email and password, then returns a JWT access/refresh token pair.",
+        description="Creates an inactive user and sends a one-time activation link by email.",
         request=RegisterRequestSerializer,
         responses={
-            201: AuthSuccessResponseSerializer,
+            201: ActivationPendingResponseSerializer,
             400: BAD_REQUEST_RESPONSE,
+            503: BAD_REQUEST_RESPONSE,
         },
         examples=[
             OpenApiExample(
@@ -692,7 +697,19 @@ class RegisterView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         user = serializer.save()
-        return Response(_build_auth_response(user), status=status.HTTP_201_CREATED)
+        try:
+            send_activation_email(user)
+        except Exception:
+            logger.exception("Failed to send activation email for user %s", user.pk)
+            user.delete()
+            return Response(
+                {"detail": "We could not send the activation email. Please try again."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response(
+            {"detail": "Check your email to activate your account."},
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class LoginView(APIView):
@@ -723,6 +740,23 @@ class LoginView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(_build_auth_response(serializer.validated_data["user"]))
+
+
+class ActivateAccountView(APIView):
+    """Activate an account from the one-time URL sent by email."""
+
+    def get(self, request, uidb64, token):
+        try:
+            user = User.objects.get(pk=force_str(urlsafe_base64_decode(uidb64)))
+        except (User.DoesNotExist, ValueError, TypeError, OverflowError):
+            user = None
+
+        if user is None or not activation_token_generator.check_token(user, token):
+            return Response({"detail": "This activation link is invalid or has expired."}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.is_active = True
+        user.save(update_fields=["is_active"])
+        return Response({"detail": "Your account is active. You can now log in."})
 
 
 class MeView(APIView):

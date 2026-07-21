@@ -51,6 +51,7 @@ class RegisterSerializer(serializers.Serializer):
             password=validated_data["password"],
             first_name=validated_data.get("first_name", "").strip(),
             last_name=validated_data.get("last_name", "").strip(),
+            is_active=False,
         )
 
 
@@ -65,6 +66,11 @@ class LoginSerializer(serializers.Serializer):
         except User.DoesNotExist as exc:
             raise serializers.ValidationError({"detail": "Invalid email or password."}) from exc
 
+        if not user.is_active:
+            raise serializers.ValidationError(
+                {"detail": "Activate your account using the link sent to your email."}
+            )
+
         authenticated_user = authenticate(
             request=self.context.get("request"),
             username=user.username,
@@ -72,9 +78,6 @@ class LoginSerializer(serializers.Serializer):
         )
         if authenticated_user is None:
             raise serializers.ValidationError({"detail": "Invalid email or password."})
-        if not authenticated_user.is_active:
-            raise serializers.ValidationError({"detail": "This account is disabled."})
-
         attrs["user"] = authenticated_user
         attrs["email"] = email
         return attrs

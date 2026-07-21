@@ -266,6 +266,10 @@ class AuthSuccessResponseSerializer(serializers.Serializer):
     refresh = serializers.CharField()
 
 
+class ActivationPendingResponseSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+
+
 class RefreshRequestSerializer(serializers.Serializer):
     refresh = serializers.CharField()
 

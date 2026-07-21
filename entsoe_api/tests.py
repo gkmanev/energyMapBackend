@@ -1029,7 +1029,10 @@ class ChartQueryApiTest(TestCase):
 
 
 class AuthApiTest(TestCase):
-    def test_register_returns_jwt_tokens_and_user(self):
+    @override_settings(RESEND_API_KEY="test-key", RESEND_FROM_EMAIL="accounts@example.com")
+    @patch("entsoe_api.email_activation.requests.post")
+    def test_register_sends_activation_email_and_requires_activation(self, mock_post):
+        mock_post.return_value.raise_for_status.return_value = None
         response = self.client.post(
             "/api/auth/register/",
             data=json.dumps(
@@ -1045,11 +1048,20 @@ class AuthApiTest(TestCase):
 
         payload = response.json()
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(payload["user"]["email"], "newuser@example.com")
-        self.assertEqual(payload["user"]["first_name"], "New")
-        self.assertIn("access", payload)
-        self.assertIn("refresh", payload)
-        self.assertTrue(User.objects.filter(email="newuser@example.com", username="newuser@example.com").exists())
+        self.assertEqual(payload["detail"], "Check your email to activate your account.")
+        user = User.objects.get(email="newuser@example.com", username="newuser@example.com")
+        self.assertFalse(user.is_active)
+        self.assertEqual(mock_post.call_count, 1)
+
+    @override_settings(RESEND_API_KEY="test-key", RESEND_FROM_EMAIL="accounts@example.com")
+    @patch("entsoe_api.email_activation.requests.post")
+    def test_activation_link_enables_login(self, mock_post):
+        mock_post.return_value.raise_for_status.return_value = None
+        self.client.post("/api/auth/register/", data=json.dumps({"email": "newuser@example.com", "password": "StrongPassword123!"}), content_type="application/json")
+        url = mock_post.call_args.kwargs["json"]["html"].split('href="')[1].split('"')[0]
+        activation_response = self.client.get(url.replace("http://127.0.0.1:8000", ""))
+        self.assertEqual(activation_response.status_code, 200)
+        self.assertTrue(User.objects.get(email="newuser@example.com").is_active)
 
     def test_register_rejects_duplicate_email(self):
         User.objects.create_user(
