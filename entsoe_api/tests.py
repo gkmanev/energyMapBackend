@@ -1027,6 +1027,53 @@ class ChartQueryApiTest(TestCase):
         self.assertEqual(payload["text"], "Which country and what time range should I use?")
         self.assertTrue(payload["conversation_id"])
 
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.agent.anthropic.Anthropic")
+    def test_anonymous_chat_is_limited_to_three_prompts(self, mock_anthropic):
+        client = MagicMock()
+        client.messages.create.return_value = _make_agent_text_response("Done.")
+        mock_anthropic.return_value = client
+
+        for _ in range(3):
+            response = self.client.post(
+                "/api/chat/",
+                data=json.dumps({"message": "Show BG prices"}),
+                content_type="application/json",
+            )
+            self.assertEqual(response.status_code, 200)
+
+        response = self.client.post(
+            "/api/chat/",
+            data=json.dumps({"message": "One more prompt"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 429)
+        self.assertIn("sign in", response.json()["error"].lower())
+        self.assertEqual(client.messages.create.call_count, 3)
+
+    @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")
+    @patch("entsoe_api.agent.anthropic.Anthropic")
+    def test_authenticated_chat_is_not_limited(self, mock_anthropic):
+        user = User.objects.create_user(
+            username="member@example.com",
+            email="member@example.com",
+            password="StrongPassword123!",
+        )
+        access_token = str(RefreshToken.for_user(user).access_token)
+        client = MagicMock()
+        client.messages.create.return_value = _make_agent_text_response("Done.")
+        mock_anthropic.return_value = client
+
+        for _ in range(4):
+            response = self.client.post(
+                "/api/chat/",
+                data=json.dumps({"message": "Show BG prices"}),
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {access_token}",
+            )
+            self.assertEqual(response.status_code, 200)
+
 
 class AuthApiTest(TestCase):
     @override_settings(RESEND_API_KEY="test-key", RESEND_FROM_EMAIL="accounts@example.com")

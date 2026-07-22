@@ -103,6 +103,34 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
+def _consume_anonymous_chat_prompt(request) -> bool:
+    """Record one anonymous chat prompt and return whether it is allowed."""
+    limit = max(0, int(getattr(settings, "ANONYMOUS_CHAT_PROMPT_LIMIT", 3)))
+    if getattr(request.user, "is_authenticated", False):
+        return True
+
+    # A session gives each anonymous browser its own allowance without exposing a
+    # user identifier in the request or trusting a client-provided value.
+    if not request.session.session_key:
+        request.session.create()
+    cache_key = f"anonymous-chat-prompts:{request.session.session_key}"
+    timeout = max(
+        1,
+        int(getattr(settings, "ANONYMOUS_CHAT_PROMPT_WINDOW_SECONDS", 24 * 60 * 60)),
+    )
+
+    if cache.add(cache_key, 1, timeout=timeout):
+        return limit >= 1
+
+    try:
+        return cache.incr(cache_key) <= limit
+    except (ValueError, TypeError):
+        # If the cache entry disappeared between add and incr, recreate it and
+        # allow this prompt rather than failing a valid chat request.
+        cache.set(cache_key, 1, timeout=timeout)
+        return limit >= 1
+
+
 # ──────────────────────────────── Utils / Helpers ───────────────────────────────
 
 def _ensure_utc(d: dt.datetime) -> dt.datetime:
@@ -805,6 +833,7 @@ class EnergyAgentChatView(APIView):
         responses={
             200: ChartQueryResponseSerializer,
             400: BAD_REQUEST_RESPONSE,
+            429: BAD_REQUEST_RESPONSE,
             502: BAD_REQUEST_RESPONSE,
         },
         examples=[
@@ -860,6 +889,15 @@ class EnergyAgentChatView(APIView):
             return Response(
                 {"error": "message is required."},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not _consume_anonymous_chat_prompt(request):
+            return Response(
+                {
+                    "error": "Anonymous users can send up to 3 prompts. "
+                    "Please sign in to continue."
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
 
         conversation_id = (
