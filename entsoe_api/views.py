@@ -109,11 +109,18 @@ def _consume_anonymous_chat_prompt(request) -> bool:
     if getattr(request.user, "is_authenticated", False):
         return True
 
-    # A session gives each anonymous browser its own allowance without exposing a
-    # user identifier in the request or trusting a client-provided value.
-    if not request.session.session_key:
-        request.session.create()
-    cache_key = f"anonymous-chat-prompts:{request.session.session_key}"
+    # The API is called cross-origin by the frontend, where browser session
+    # cookies are not sent unless the client explicitly enables credentials.
+    # Use the originating address instead so a missing cookie cannot reset the
+    # anonymous allowance on every request. The production proxy forwards it in
+    # X-Forwarded-For; local/direct requests fall back to REMOTE_ADDR.
+    forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR", "")
+    client_address = (
+        forwarded_for.split(",", 1)[0].strip()
+        if forwarded_for
+        else request.META.get("REMOTE_ADDR", "unknown")
+    )
+    cache_key = f"anonymous-chat-prompts:{client_address}"
     timeout = max(
         1,
         int(getattr(settings, "ANONYMOUS_CHAT_PROMPT_WINDOW_SECONDS", 24 * 60 * 60)),

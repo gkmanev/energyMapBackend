@@ -8,7 +8,7 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.cache import cache
 from django.db import connection
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.test import Client, SimpleTestCase, TestCase, override_settings
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from entsoe_api.conversation import load_history
@@ -1035,17 +1035,21 @@ class ChartQueryApiTest(TestCase):
         mock_anthropic.return_value = client
 
         for _ in range(3):
-            response = self.client.post(
+            # Fresh clients model cross-origin browser requests that do not send
+            # Django's session cookie. The IP-based quota must still apply.
+            response = Client().post(
                 "/api/chat/",
                 data=json.dumps({"message": "Show BG prices"}),
                 content_type="application/json",
+                REMOTE_ADDR="203.0.113.10",
             )
             self.assertEqual(response.status_code, 200)
 
-        response = self.client.post(
+        response = Client().post(
             "/api/chat/",
             data=json.dumps({"message": "One more prompt"}),
             content_type="application/json",
+            REMOTE_ADDR="203.0.113.10",
         )
 
         self.assertEqual(response.status_code, 429)
