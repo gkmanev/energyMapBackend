@@ -11,6 +11,7 @@ from .tools import TOOL_SCHEMAS, execute_tool
 
 
 MAX_AGENT_TURNS = 8
+DEFAULT_MAX_OUTPUT_TOKENS = 1100
 
 
 @dataclass(frozen=True)
@@ -61,7 +62,20 @@ Behavior:
 - If a tool returns an error, fix the input and retry, or tell the user what's unsupported.
 - Answer general questions (what data exists, what RES means, supported countries) directly
   in text without tools.
-- Keep replies concise. Never invent numbers not present in tool results."""
+- Never invent numbers not present in tool results.
+
+Chat presentation rules:
+- Write for a narrow chat panel. Use plain Markdown only: no emoji, country flags, horizontal
+  rules, block quotes, or decorative introductions.
+- For an analysis, lead with a direct answer of one or two sentences. Then use at most two short
+  labelled sections. Prefer bullets; use a table only when it materially improves a comparison.
+- Do not give every country its own heading. For a large comparison, show the most meaningful
+  3–5 markets in a compact, maximum-three-column table and group the remainder in one sentence.
+- Keep bullet points to one sentence each. Mention important data limitations in one final
+  "Note:" sentence. Do not repeat the timeframe or methodology unless it affects the conclusion.
+- Do not end with a generic offer to make a chart. If a chart would materially help, make one
+  only when the user asks to see, plot, or chart the data.
+- Keep replies concise."""
 
 
 def _serialize_content(blocks: list[Any]) -> list[dict]:
@@ -105,6 +119,10 @@ def run_energy_agent(
 
     model = getattr(settings, "CLAUDE_CHAT_MODEL", "claude-sonnet-4-6")
     timeout_seconds = float(getattr(settings, "CLAUDE_CHAT_TIMEOUT", 60))
+    max_output_tokens = max(
+        256,
+        int(getattr(settings, "CLAUDE_CHAT_MAX_OUTPUT_TOKENS", DEFAULT_MAX_OUTPUT_TOKENS)),
+    )
 
     now = (now_utc or dt.datetime.now(dt.timezone.utc)).astimezone(dt.timezone.utc)
     system = _build_system_prompt(now)
@@ -123,7 +141,7 @@ def run_energy_agent(
         try:
             response = client.messages.create(
                 model=model,
-                max_tokens=2048,
+                max_tokens=max_output_tokens,
                 system=system,
                 messages=messages,
                 tools=TOOL_SCHEMAS,

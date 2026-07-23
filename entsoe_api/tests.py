@@ -876,6 +876,10 @@ class ChartQueryApiTest(TestCase):
         self.assertEqual(payload["charts"][0]["series"], ["res"])
         self.assertEqual(payload["charts"][0]["resolution"], "d")
 
+        first_request = client.messages.create.call_args_list[0].kwargs
+        self.assertEqual(first_request["max_tokens"], 1100)
+        self.assertIn("Write for a narrow chat panel", first_request["system"])
+
     @override_settings(
         ANTHROPIC_API_KEY="test-key",
         CLAUDE_CHAT_MODEL="claude-sonnet-4-6",
@@ -1053,7 +1057,8 @@ class ChartQueryApiTest(TestCase):
         )
 
         self.assertEqual(response.status_code, 429)
-        self.assertIn("sign in", response.json()["error"].lower())
+        self.assertEqual(response.json()["code"], "anonymous_prompt_limit_reached")
+        self.assertIn("limit", response.json()["error"].lower())
         self.assertEqual(client.messages.create.call_count, 3)
 
     @override_settings(ANTHROPIC_API_KEY="test-key", CLAUDE_CHAT_MODEL="claude-sonnet-4-6")

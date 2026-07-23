@@ -901,8 +901,10 @@ class EnergyAgentChatView(APIView):
         if not _consume_anonymous_chat_prompt(request):
             return Response(
                 {
-                    "error": "Anonymous users can send up to 3 prompts. "
-                    "Please sign in to continue."
+                    "error": "You've reached the 3-query limit for guest users. "
+                    "Please sign in to continue.",
+                    "code": "anonymous_prompt_limit_reached",
+                    "limit": 3,
                 },
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
