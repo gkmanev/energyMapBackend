@@ -87,6 +87,16 @@ class Command(BaseCommand):
         if not 1 <= options["chunk_days"] <= 31:
             raise CommandError("--chunk-days must be between 1 and 31.")
 
+        output_path = options["output"].expanduser()
+        if output_path.suffix.lower() not in {".csv", ".xlsx"}:
+            raise CommandError("Output must use the .xlsx or .csv extension.")
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise CommandError(
+                f"Cannot create output directory {output_path.parent}: {exc}"
+            ) from exc
+
         api_key = getattr(settings, "ENTSOE_API_KEY", "") or os.getenv("ENTSOE_TOKEN")
         if not api_key:
             raise CommandError("Missing ENTSOE_API_KEY setting or ENTSOE_TOKEN environment variable.")
@@ -156,10 +166,6 @@ class Command(BaseCommand):
             ]
         ]
 
-        output_path = options["output"].expanduser()
-        if output_path.suffix.lower() not in {".csv", ".xlsx"}:
-            raise CommandError("Output must use the .xlsx or .csv extension.")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
         if output_path.suffix.lower() == ".xlsx":
             hourly.to_excel(output_path, index=False, sheet_name="BG solar generation")
         else:
