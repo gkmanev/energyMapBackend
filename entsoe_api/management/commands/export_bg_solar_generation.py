@@ -25,28 +25,22 @@ def _parse_datetime(value: str) -> dt.datetime:
     return parsed.astimezone(UTC)
 
 
-def _month_ranges(start: dt.datetime, end: dt.datetime):
-    """Yield UTC ranges bounded by fixed-UTC+2 calendar-month starts.
+def _request_ranges(start: dt.datetime, end: dt.datetime, chunk_days: int):
+    """Yield short UTC request ranges for the A75 endpoint.
 
-    ENTSO-E can reject very large A75 requests, so monthly requests are used
-    even though the requested export spans two years.
+    The ENTSO-E endpoint can reject some otherwise valid month-long ranges;
+    short requests are more reliable and are combined before export.
     """
     current = start
     while current < end:
-        local_current = current.astimezone(UTC_PLUS_2)
-        next_year = local_current.year + (local_current.month == 12)
-        next_month = 1 if local_current.month == 12 else local_current.month + 1
-        next_boundary = min(
-            dt.datetime(next_year, next_month, 1, tzinfo=UTC_PLUS_2).astimezone(UTC),
-            end,
-        )
+        next_boundary = min(current + dt.timedelta(days=chunk_days), end)
         yield current, next_boundary
         current = next_boundary
 
 
 class Command(BaseCommand):
     help = (
-        "Fetch BG solar generation (B16) in monthly ENTSO-E requests and export "
+        "Fetch BG solar generation (B16) in short ENTSO-E requests and export "
         "hourly mean MW values with fixed UTC+2 timestamps."
     )
 
@@ -71,7 +65,13 @@ class Command(BaseCommand):
             "--delay",
             type=float,
             default=1.0,
-            help="Seconds to wait between monthly API requests (default: 1).",
+            help="Seconds to wait between API requests (default: 1).",
+        )
+        parser.add_argument(
+            "--chunk-days",
+            type=int,
+            default=7,
+            help="Days per ENTSO-E request (default: 7; maximum: 31).",
         )
 
     def handle(self, *args, **options):
@@ -84,6 +84,8 @@ class Command(BaseCommand):
             raise CommandError("--start must be earlier than --end.")
         if options["delay"] < 0:
             raise CommandError("--delay must be zero or greater.")
+        if not 1 <= options["chunk_days"] <= 31:
+            raise CommandError("--chunk-days must be between 1 and 31.")
 
         api_key = getattr(settings, "ENTSOE_API_KEY", "") or os.getenv("ENTSOE_TOKEN")
         if not api_key:
@@ -95,7 +97,7 @@ class Command(BaseCommand):
             raise CommandError("BG is missing from settings.ENTSOE_COUNTRY_TO_EICS.")
 
         frames = []
-        ranges = list(_month_ranges(start, end))
+        ranges = list(_request_ranges(start, end, options["chunk_days"]))
         for index, (range_start, range_end) in enumerate(ranges, start=1):
             self.stdout.write(
                 f"[{index}/{len(ranges)}] Fetching BG solar "
