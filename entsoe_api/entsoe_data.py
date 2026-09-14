@@ -603,9 +603,17 @@ class EntsoeGenerationByType:
 
         if aggregate_by_country:
             # Sum across zones per country × timestamp × psr
-            out = (full.groupby(["country","datetime_utc","psr_type","psr_name"], as_index=False)["generation_MW"]
-                        .sum(numeric_only=True)
-                        .sort_values(["country","datetime_utc","psr_type"])
+            out = (full.groupby(["country", "datetime_utc", "psr_type", "psr_name"], as_index=False)
+                        .agg(
+                            generation_MW=("generation_MW", "sum"),
+                            resolution=(
+                                "resolution",
+                                lambda values: ",".join(
+                                    sorted({str(value) for value in values if value})
+                                ),
+                            ),
+                        )
+                        .sort_values(["country", "datetime_utc", "psr_type"])
                         .reset_index(drop=True))
             return out
         else:

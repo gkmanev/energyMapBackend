@@ -74,6 +74,36 @@ def _ensure_timezone_aware(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _prepare_export_df(
+    df: pd.DataFrame,
+    resolution: str,
+    utc_offset_hours: int,
+) -> pd.DataFrame:
+    """Aggregate for export only and render Excel-safe UTC-offset timestamps."""
+    export_df = df.copy()
+    export_df["datetime_utc"] = pd.to_datetime(export_df["datetime_utc"], utc=True)
+
+    if resolution == "hourly":
+        group_columns = [
+            column for column in ("country", "zone", "psr_type", "psr_name")
+            if column in export_df.columns
+        ]
+        export_df = (
+            export_df
+            .set_index("datetime_utc")
+            .groupby(group_columns + [pd.Grouper(freq="h")], dropna=False)["generation_MW"]
+            .mean()
+            .reset_index()
+        )
+        export_df["resolution"] = "PT60M"
+
+    export_df["datetime_utc_plus_2"] = (
+        export_df["datetime_utc"] + pd.Timedelta(hours=utc_offset_hours)
+    ).dt.tz_localize(None)
+    export_df = export_df.drop(columns="datetime_utc")
+    return export_df
+
+
 class Command(BaseCommand):
     help = (
         "Fetch ENTSO-E Actual Generation per Production Type (A75/A16) "
@@ -117,14 +147,26 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--format",
-            choices=["json", "csv"],
+            choices=["json", "csv", "xlsx"],
             default="json",
-            help="Output format (default: json).",
+            help="Output format (default: json). XLSX requires --output.",
         )
         parser.add_argument(
             "--output",
             type=str,
             help="If provided, write output to this file; otherwise print to stdout.",
+        )
+        parser.add_argument(
+            "--export-resolution",
+            choices=["native", "hourly"],
+            default="native",
+            help="Export at the source interval or hourly mean MW (default: native).",
+        )
+        parser.add_argument(
+            "--utc-offset-hours",
+            type=int,
+            default=0,
+            help="Fixed UTC offset applied to exported timestamps only (default: 0).",
         )
         parser.add_argument(
             "--delay",
@@ -335,6 +377,13 @@ class Command(BaseCommand):
         else:
             df = pd.DataFrame()
 
+        if not df.empty and options.get("output"):
+            df = _prepare_export_df(
+                df,
+                resolution=options["export_resolution"],
+                utc_offset_hours=options["utc_offset_hours"],
+            )
+
         # --- Summary ---
         self.stdout.write("")
         self.stdout.write(self.style.SUCCESS("=" * 70))
@@ -390,12 +439,19 @@ class Command(BaseCommand):
                     with open(out_path, "w", encoding="utf-8") as f:
                         f.write(payload)
                     self.stdout.write(self.style.SUCCESS(f"📄 Wrote JSON to {out_path}"))
-                else:  # csv
+                elif out_fmt == "csv":
                     df.to_csv(out_path, index=False)
+                    self.stdout.write(self.style.SUCCESS(f"Wrote CSV to {out_path}"))
+                else:  # xlsx
+                    df.to_excel(out_path, index=False, sheet_name="Generation")
+                    self.stdout.write(self.style.SUCCESS(f"Wrote XLSX to {out_path}"))
+                    return
                     self.stdout.write(self.style.SUCCESS(f"📄 Wrote CSV to {out_path}"))
             except Exception as e:
                 self.stdout.write(self.style.ERROR(f"❌ Failed to write output file: {e}"))
         elif not df.empty and not out_path:
+            if out_fmt == "xlsx":
+                raise CommandError("--format xlsx requires --output PATH.xlsx.")
             # Print to stdout only if no output file specified
             if out_fmt == "json":
                 records = EntsoeGenerationByType.to_records(df, datetime_cols=["datetime_utc"])
