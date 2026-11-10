@@ -85,6 +85,28 @@ def fetch_prices_hourly_task(self):
     logger.info("Hourly prices window: %s -> %s", start_iso, end_iso)
     call_command("fetch_prices", start=start_iso, end=end_iso)
 
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def fetch_prices_tr_task(self):
+    """Fetch Turkish (EPİAŞ) day-ahead prices for today and tomorrow (Turkish time).
+
+    Tomorrow is published ~14:00 TR time; before that the dayahead call just
+    reports no data and saves nothing.
+    """
+    logger.info("Fetching TR prices: today + dayahead")
+    call_command("fetch_prices_tr", period="today")
+    call_command("fetch_prices_tr", period="dayahead")
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def fetch_generation_tr_hourly_task(self):
+    """Fetch Turkish (EPİAŞ) real-time generation for yesterday + today (Turkish time).
+
+    Including yesterday fills late-arriving hours around midnight.
+    """
+    today_tr = datetime.now(ZoneInfo("Europe/Istanbul")).date()
+    start, end = (today_tr - timedelta(days=1)).isoformat(), today_tr.isoformat()
+    logger.info("TR generation window: %s -> %s", start, end)
+    call_command("fetch_generation_tr", start=start, end=end)
 
 
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})

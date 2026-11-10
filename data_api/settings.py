@@ -225,6 +225,16 @@ CELERY_BEAT_SCHEDULE = {
         "task": "entsoe_api.tasks.fetch_prices_hourly_task",
         "schedule": crontab(minute=15),
     },
+    # Sofia time (CELERY_TIMEZONE). EPİAŞ publishes next-day prices ~14:00 TR
+    # (13:00 Sofia in winter, 14:00 in summer); later runs are retries/catch-ups.
+    "fetch_prices_tr": {
+        "task": "entsoe_api.tasks.fetch_prices_tr_task",
+        "schedule": crontab(hour="0,14,16,19", minute=25),
+    },
+    "fetch_generation_tr_hourly": {
+        "task": "entsoe_api.tasks.fetch_generation_tr_hourly_task",
+        "schedule": crontab(minute=35),
+    },
     "fetch_flows_hourly": {
         "task": "entsoe_api.tasks.fetch_flows_hourly_task",
         "schedule": crontab(minute='*/17')
