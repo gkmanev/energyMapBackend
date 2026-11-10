@@ -406,9 +406,15 @@ def _eic_to_country_iso_map() -> Dict[str, str]:
     return mapping
 
 @lru_cache(maxsize=None)
+def _cached_country_by_iso(iso: str) -> Country:
+    return Country.objects.get(pk=iso)
+
+
 def _country_by_iso(iso: str) -> Optional[Country]:
+    # Only hits are cached: a miss must not stick, or flows for a country created
+    # later (e.g. TR via the EPİAŞ commands) would keep saving NULL country FKs.
     try:
-        return Country.objects.get(pk=str(iso).upper())
+        return _cached_country_by_iso(str(iso).upper())
     except Country.DoesNotExist:
         return None
 
