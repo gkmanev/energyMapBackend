@@ -2979,11 +2979,12 @@ class PhysicalFlowsLatestView(APIView):
                 src = row.get(src_field) or row.get("country_from") or row.get("source_country") or row.get("from_country")
                 dst = row.get(dst_field) or row.get("country_to") or row.get("target_country") or row.get("to_country")
                 if src == country.pk:
-                    neighbor = dst
+                    # Unmapped areas (e.g. TR) have no country; key them by EIC so sorting never sees None.
+                    neighbor = dst or row.get("in_domain_eic") or "UNKNOWN"
                     by_neighbor.setdefault(neighbor, {"in_mw": 0.0, "out_mw": 0.0})
                     by_neighbor[neighbor]["out_mw"] += val
                 elif dst == country.pk:
-                    neighbor = src
+                    neighbor = src or row.get("out_domain_eic") or "UNKNOWN"
                     by_neighbor.setdefault(neighbor, {"in_mw": 0.0, "out_mw": 0.0})
                     by_neighbor[neighbor]["in_mw"] += val
 

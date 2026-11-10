@@ -1,0 +1,18 @@
+[Unit]
+Description=Energy dashboard kiosk
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/kiosk
+Environment=PYTHONUNBUFFERED=1
+Environment=KIOSK_PANEL_HEIGHT=32
+ExecStart=/usr/bin/gnome-session-inhibit --inhibit idle:suspend --reason "Energy dashboard kiosk" %h/kiosk/.venv/bin/python %h/kiosk/kiosk.py
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=90
+KillMode=control-group
+
+[Install]
+WantedBy=graphical-session.target

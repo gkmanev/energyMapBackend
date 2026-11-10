@@ -3,6 +3,8 @@ import logging
 import signal
 import sys
 import time
+import shutil
+import threading
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -16,8 +18,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 
 
-os.environ.setdefault("DISPLAY", ":0")
-os.environ.setdefault("XAUTHORITY", "/home/entra/.Xauthority")
+# Inherit DISPLAY and XAUTHORITY from the logged-in desktop session.
 
 
 LEFT_URL = "https://visualize.energy"
@@ -80,30 +81,31 @@ def get_screen_size():
     return width, height
 
 
-SCREEN_WIDTH, SCREEN_HEIGHT = get_screen_size()
-
 # Set this to the height of your desktop panel if one is visible.
-PANEL_HEIGHT = 0
+PANEL_HEIGHT = int(os.environ.get("KIOSK_PANEL_HEIGHT", "0"))
 
 REFRESH_INTERVAL = 5 * 60
 HEALTH_CHECK_INTERVAL = 10
 RESTART_DELAY = 5
 
-CHROMIUM_BINARY = "/usr/bin/chromium"
-CHROMEDRIVER_BINARY = "/usr/bin/chromedriver"
+def find_binary(variable, candidates):
+    override = os.environ.get(variable)
+    for candidate in ([override] if override else candidates):
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    raise RuntimeError(f"Set {variable} to an installed executable: {candidates}")
 
 HOME = Path.home()
 
-LEFT_PROFILE = HOME / ".config" / "kiosk-chromium-left"
-RIGHT_PROFILE = HOME / ".config" / "kiosk-chromium-right"
-
-DESKTOP_USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/150.0.0.0 Safari/537.36"
-)
+PROFILE_ROOT = Path(os.environ.get(
+    "KIOSK_PROFILE_ROOT", str(HOME / "snap/chromium/common/kiosk")
+)).expanduser()
+LEFT_PROFILE = PROFILE_ROOT / "left"
+RIGHT_PROFILE = PROFILE_ROOT / "right"
 
 running = True
+stop_event = threading.Event()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -116,10 +118,7 @@ def stop_program(signum=None, frame=None):
 
     logging.info("Stopping kiosk...")
     running = False
-
-
-signal.signal(signal.SIGTERM, stop_program)
-signal.signal(signal.SIGINT, stop_program)
+    stop_event.set()
 
 
 def create_browser(
@@ -134,7 +133,15 @@ def create_browser(
     profile_path.mkdir(parents=True, exist_ok=True)
 
     options = Options()
-    options.binary_location = CHROMIUM_BINARY
+    # The Snap's ChromeDriver must launch its bundled executable directly;
+    # /snap/bin/chromium cannot be executed inside its confined environment.
+    options.binary_location = find_binary("CHROMIUM_BINARY", [
+        "/snap/chromium/current/usr/lib/chromium-browser/chrome",
+        "/snap/bin/chromium", "chromium", "chromium-browser",
+    ])
+    # Native Wayland clients cannot reliably request absolute window positions.
+    options.add_argument("--ozone-platform=x11")
+    options.page_load_strategy = "eager"
 
     options.add_argument(f"--user-data-dir={profile_path}")
     options.add_argument(f"--window-position={x},{y}")
@@ -150,18 +157,19 @@ def create_browser(
     options.add_argument("--noerrdialogs")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--password-store=basic")
-    # Helps WebGL-based dashboards on Raspberry Pi.
+    # Keep hardware acceleration available for the dashboards.
     options.add_argument("--enable-gpu")
     options.add_argument("--enable-webgl")
     options.add_argument("--ignore-gpu-blocklist")
 
-    if spoof_desktop:
-        options.add_argument(f"--user-agent={DESKTOP_USER_AGENT}")
-
     # Removes tabs and address bar.
     options.add_argument(f"--app={url}")
 
-    service = Service(CHROMEDRIVER_BINARY)
+    service = Service(find_binary("CHROMEDRIVER_BINARY", [
+        "/snap/bin/chromium.chromedriver", "chromedriver",
+        "chromium.chromedriver",
+    ]), log_output=os.environ.get("KIOSK_DRIVER_LOG"),
+        service_args=["--verbose"] if os.environ.get("KIOSK_DRIVER_LOG") else None)
 
     logging.info(
         "Opening %s at x=%s y=%s width=%s height=%s",
@@ -177,90 +185,48 @@ def create_browser(
         options=options,
     )
 
-    driver.set_window_rect(
-        x=x,
-        y=y,
-        width=width,
-        height=height,
-    )
+    try:
+        driver.set_window_rect(
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+        )
 
-    if spoof_desktop:
-        # Override values frequently used for browser compatibility checks.
-        driver.execute_cdp_cmd(
-            "Network.setUserAgentOverride",
-            {
-                "userAgent": DESKTOP_USER_AGENT,
+        driver.set_page_load_timeout(45)
+        driver.set_script_timeout(15)
+        if spoof_desktop:
+            # Use the actual browser version while presenting a desktop to Blynk.
+            version = driver.capabilities["browserVersion"]
+            major = version.split(".")[0]
+            driver.execute_cdp_cmd("Network.setUserAgentOverride", {
+                "userAgent": (
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    f"(KHTML, like Gecko) Chrome/{version} Safari/537.36"
+                ),
                 "platform": "Linux x86_64",
                 "userAgentMetadata": {
-                    "brands": [
-                        {
-                            "brand": "Chromium",
-                            "version": "150",
-                        },
-                        {
-                            "brand": "Google Chrome",
-                            "version": "150",
-                        },
-                        {
-                            "brand": "Not_A Brand",
-                            "version": "99",
-                        },
-                    ],
-                    "fullVersionList": [
-                        {
-                            "brand": "Chromium",
-                            "version": "150.0.7871.124",
-                        },
-                        {
-                            "brand": "Google Chrome",
-                            "version": "150.0.7871.124",
-                        },
-                        {
-                            "brand": "Not_A Brand",
-                            "version": "99.0.0.0",
-                        },
-                    ],
-                    "fullVersion": "150.0.7871.124",
-                    "platform": "Linux",
-                    "platformVersion": "6.0.0",
-                    "architecture": "x86",
-                    "model": "",
-                    "mobile": False,
-                    "bitness": "64",
-                    "wow64": False,
+                    "brands": [{"brand": "Chromium", "version": major}],
+                    "fullVersionList": [{"brand": "Chromium", "version": version}],
+                    "platform": "Linux", "platformVersion": "",
+                    "architecture": "x86", "model": "", "mobile": False,
+                    "bitness": "64", "wow64": False,
                 },
-            },
-        )
+            })
 
-        driver.execute_cdp_cmd(
-            "Page.addScriptToEvaluateOnNewDocument",
-            {
-                "source": """
-                    Object.defineProperty(navigator, 'platform', {
-                        get: () => 'Linux x86_64'
-                    });
+        driver.get(url)
 
-                    Object.defineProperty(navigator, 'vendor', {
-                        get: () => 'Google Inc.'
-                    });
+        if "blynk.cloud" in url:
+            stop_event.wait(2)
+            click_blynk_web_console(driver)
 
-                    Object.defineProperty(navigator, 'maxTouchPoints', {
-                        get: () => 0
-                    });
-                """
-            },
-        )
+        if spoof_desktop:
+            log_browser_information(driver)
 
-    driver.get(url)
-   
-    if "blynk.cloud" in url:
-    	time.sleep(2)
-    	click_blynk_web_console(driver)
-
-    if spoof_desktop:
-        log_browser_information(driver)
-
-    return driver
+        return driver
+    except Exception:
+        close_browser(driver)
+        raise
 
 
 def log_browser_information(driver):
@@ -327,7 +293,7 @@ def refresh_browser(driver, name: str):
         driver.refresh()
 
         if name == "Right":
-            time.sleep(2)
+            stop_event.wait(2)
             click_blynk_web_console(driver)
 
         logging.info("%s window refreshed", name)
@@ -340,7 +306,22 @@ def refresh_browser(driver, name: str):
 
 
 def main():
+    signal.signal(signal.SIGTERM, stop_program)
+    signal.signal(signal.SIGINT, stop_program)
+    if not os.environ.get("DISPLAY"):
+        raise RuntimeError("Start kiosk from the graphical desktop with DISPLAY set (X11/XWayland).")
+    while running:
+        try:
+            SCREEN_WIDTH, SCREEN_HEIGHT = get_screen_size()
+            break
+        except tk.TclError as error:
+            logging.warning("Waiting for desktop display: %s", error)
+            stop_event.wait(RESTART_DELAY)
+    if not running:
+        return
     usable_height = SCREEN_HEIGHT - PANEL_HEIGHT
+    if usable_height <= 0 or SCREEN_WIDTH < 2 or PANEL_HEIGHT < 0:
+        raise ValueError("Invalid screen size or KIOSK_PANEL_HEIGHT")
     half_width = SCREEN_WIDTH // 2
 
     left_driver = None
@@ -354,77 +335,78 @@ def main():
         SCREEN_HEIGHT,
     )
 
-    while running:
-        if not browser_is_alive(left_driver):
-            close_browser(left_driver)
-            left_driver = None
+    try:
+        while running:
+            if not browser_is_alive(left_driver):
+                close_browser(left_driver)
+                left_driver = None
 
-            try:
-                left_driver = create_browser(
-                    url=LEFT_URL,
-                    profile_path=LEFT_PROFILE,
-                    x=0,
-                    y=0,
-                    width=half_width,
-                    height=usable_height,
-                    spoof_desktop=False,
-                )
+                try:
+                    left_driver = create_browser(
+                        url=LEFT_URL,
+                        profile_path=LEFT_PROFILE,
+                        x=0,
+                        y=PANEL_HEIGHT,
+                        width=half_width,
+                        height=usable_height,
+                        spoof_desktop=False,
+                    )
 
-                logging.info("Left window started")
+                    logging.info("Left window started")
 
-            except Exception as error:
-                logging.error(
-                    "Could not start left window: %s",
-                    error,
-                )
+                except Exception as error:
+                    logging.error(
+                        "Could not start left window: %s",
+                        error,
+                    )
 
-        if not browser_is_alive(right_driver):
-            close_browser(right_driver)
-            right_driver = None
+            if not browser_is_alive(right_driver):
+                close_browser(right_driver)
+                right_driver = None
 
-            try:
-                right_driver = create_browser(
-                    url=RIGHT_URL,
-                    profile_path=RIGHT_PROFILE,
-                    x=half_width,
-                    y=0,
-                    width=SCREEN_WIDTH - half_width,
-                    height=usable_height,
-                    spoof_desktop=True,
-                )
+                try:
+                    right_driver = create_browser(
+                        url=RIGHT_URL,
+                        profile_path=RIGHT_PROFILE,
+                        x=half_width,
+                        y=PANEL_HEIGHT,
+                        width=SCREEN_WIDTH - half_width,
+                        height=usable_height,
+                        spoof_desktop=True,
+                    )
 
-                logging.info("Right window started")
+                    logging.info("Right window started")
 
-            except Exception as error:
-                logging.error(
-                    "Could not start right window: %s",
-                    error,
-                )
+                except Exception as error:
+                    logging.error(
+                        "Could not start right window: %s",
+                        error,
+                    )
 
-        current_time = time.monotonic()
+            current_time = time.monotonic()
 
-        if current_time - last_refresh >= REFRESH_INTERVAL:
-            if left_driver is not None:
-                left_driver = refresh_browser(
-                    left_driver,
-                    "Left",
-                )
+            if current_time - last_refresh >= REFRESH_INTERVAL:
+                if left_driver is not None:
+                    left_driver = refresh_browser(
+                        left_driver,
+                        "Left",
+                    )
 
-            if right_driver is not None:
-                right_driver = refresh_browser(
-                    right_driver,
-                    "Right",
-                )
+                if right_driver is not None:
+                    right_driver = refresh_browser(
+                        right_driver,
+                        "Right",
+                    )
 
-            last_refresh = current_time
+                last_refresh = current_time
 
-        if left_driver is None or right_driver is None:
-            time.sleep(RESTART_DELAY)
-        else:
-            time.sleep(HEALTH_CHECK_INTERVAL)
-
-    close_browser(left_driver)
-    close_browser(right_driver)
+            if left_driver is None or right_driver is None:
+                stop_event.wait(RESTART_DELAY)
+            else:
+                stop_event.wait(HEALTH_CHECK_INTERVAL)
+    finally:
+        close_browser(left_driver)
+        close_browser(right_driver)
 
     logging.info("Kiosk stopped")
 
