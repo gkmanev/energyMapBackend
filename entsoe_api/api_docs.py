@@ -213,6 +213,7 @@ class ApiRootResponseSerializer(serializers.Serializer):
     generation_wind_speed_range = serializers.URLField()
     generation_wind_speed_bulk_range = serializers.URLField()
     flows_range = serializers.URLField()
+    flows_country_range = serializers.URLField()
     flows_latest = serializers.URLField()
     schema = serializers.URLField()
     swagger_ui = serializers.URLField()
@@ -479,6 +480,26 @@ class FlowTotalsSerializer(serializers.Serializer):
     in_mw = serializers.FloatField()
     out_mw = serializers.FloatField()
     net_mw = serializers.FloatField()
+
+
+class CountryFlowPointSerializer(serializers.Serializer):
+    datetime_utc = serializers.DateTimeField(help_text="UTC bucket start.")
+    imports_mw = serializers.FloatField()
+    exports_mw = serializers.FloatField()
+    net_mw = serializers.FloatField(help_text="Imports minus exports; positive means net importing.")
+    is_partial = serializers.BooleanField(
+        help_text="Incomplete time coverage for at least one directed border observed in this request. Entirely absent borders cannot be detected."
+    )
+
+
+class CountryFlowsRangeResponseSerializer(serializers.Serializer):
+    country = serializers.CharField()
+    start_utc = serializers.DateTimeField()
+    end_utc = serializers.DateTimeField()
+    resolution = serializers.ChoiceField(choices=["15m", "h", "d"])
+    unit = serializers.CharField()
+    count = serializers.IntegerField()
+    items = CountryFlowPointSerializer(many=True)
 
 
 class NeighborFlowSerializer(serializers.Serializer):

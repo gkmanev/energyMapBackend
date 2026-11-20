@@ -1,0 +1,2820 @@
+openapi: 3.0.3
+info:
+  title: visualize.energy Platform Data API
+  version: 1.0.0
+  description: REST API for visualize.energy - capacity, generation, price, and cross-border
+    flow data. Use `/api/schema/` for the OpenAPI schema, `/api/docs/swagger/` to
+    try endpoints, and `/api/docs/redoc/` for the reference documentation.
+paths:
+  /api/:
+    get:
+      operationId: root_retrieve
+      description: Returns the main data endpoints together with links to the OpenAPI
+        schema, Swagger UI, and ReDoc.
+      summary: List API entrypoints
+      tags:
+      - Meta
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiRootResponse'
+              examples:
+                APIRootResponse:
+                  value:
+                    auth_register: https://api.example.com/api/auth/register/
+                    auth_login: https://api.example.com/api/auth/login/
+                    auth_refresh: https://api.example.com/api/auth/refresh/
+                    auth_me: https://api.example.com/api/auth/me/
+                    capacity_latest: https://api.example.com/api/capacity/latest/
+                    capacity_bulk_latest: https://api.example.com/api/capacity/bulk-latest/
+                    generation_yesterday: https://api.example.com/api/generation/yesterday/
+                    chart_query: https://api.example.com/api/chart-query/
+                    prices_range: https://api.example.com/api/prices/range/
+                    price_bulk: https://api.example.com/api/prices/bulk-range/
+                    generation_range: https://api.example.com/api/generation/range/
+                    generation_res_range: https://api.example.com/api/generation-res/range/
+                    generation_bulk_range: https://api.example.com/api/generation/bulk-range/
+                    generation_forecast_range: https://api.example.com/api/generation-forecast/range/
+                    generation_irradiance_range: https://api.example.com/api/generation-irradiance/range/
+                    generation_irradiance_bulk_range: https://api.example.com/api/generation-irradiance/bulk-range/
+                    generation_wind_speed_range: https://api.example.com/api/generation-wind-speed/range/
+                    generation_wind_speed_bulk_range: https://api.example.com/api/generation-wind-speed/bulk-range/
+                    flows_range: https://api.example.com/api/flows/range/
+                    flows_country_range: https://api.example.com/api/flows/country-range/
+                    flows_latest: https://api.example.com/api/flows/latest/
+                    schema: https://api.example.com/api/schema/
+                    swagger_ui: https://api.example.com/api/docs/swagger/
+                    redoc: https://api.example.com/api/docs/redoc/
+                  summary: API root response
+          description: ''
+  /api/auth/activate/{uidb64}/{token}/:
+    get:
+      operationId: auth_activate_retrieve
+      description: Activate an account from the one-time URL sent by email.
+      parameters:
+      - in: path
+        name: token
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: uidb64
+        schema:
+          type: string
+        required: true
+      tags:
+      - auth
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/auth/login/:
+    post:
+      operationId: auth_login_create
+      description: Authenticates a user and returns a JWT access/refresh token pair.
+      summary: Log in with email and password
+      tags:
+      - Meta
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            examples:
+              LoginRequest:
+                value:
+                  email: user@example.com
+                  password: StrongPassword123!
+                summary: Login request
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSuccessResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/auth/me/:
+    get:
+      operationId: auth_me_retrieve
+      description: Requires a Bearer access token.
+      summary: Return the current authenticated user
+      tags:
+      - Meta
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthUserResponse'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/auth/refresh/:
+    post:
+      operationId: auth_refresh_create
+      description: Accepts a refresh token and returns a new access token.
+      summary: Refresh an access token
+      tags:
+      - Meta
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessTokenResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/auth/register/:
+    post:
+      operationId: auth_register_create
+      description: Creates an inactive user and sends a one-time activation link by
+        email.
+      summary: Register a user account
+      tags:
+      - Meta
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            examples:
+              RegisterRequest:
+                value:
+                  email: user@example.com
+                  password: StrongPassword123!
+                  first_name: Ada
+                  last_name: Lovelace
+                summary: Register request
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivationPendingResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/capacity/bulk-latest/:
+    get:
+      operationId: capacity_bulk_latest_retrieve
+      description: Returns the latest installed-capacity snapshot for each requested
+        country. The `data` object is keyed by country code.
+      summary: Latest capacity snapshot for multiple countries
+      parameters:
+      - in: query
+        name: countries
+        schema:
+          type: string
+        description: Comma-separated ISO country codes such as `BG,RO,GR`. Maximum
+          40 countries per request.
+        required: true
+      - in: query
+        name: psr
+        schema:
+          type: string
+        description: ENTSO-E production type code such as `B16` (solar) or `B18` (wind).
+      tags:
+      - Capacity
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapacityBulkResponse'
+              examples:
+                BulkCapacitySnapshot:
+                  value:
+                    request_info:
+                      countries_requested:
+                      - BG
+                      - RO
+                      - XX
+                      countries_found:
+                      - BG
+                      - RO
+                      countries_ignored:
+                      - XX
+                      psr: B16
+                      total_countries: 2
+                      total_records: 2
+                      server_elapsed_ms: 8.47
+                    data:
+                      BG:
+                        country: BG
+                        year: 2025
+                        items:
+                        - psr_type: B16
+                          psr_name: Solar
+                          installed_capacity_mw: '3021.000'
+                      RO:
+                        country: RO
+                        year: 2025
+                        items:
+                        - psr_type: B16
+                          psr_name: Solar
+                          installed_capacity_mw: '1885.400'
+                  summary: Bulk capacity snapshot
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                MissingCountriesParameter:
+                  value:
+                    detail: countries parameter is required
+                  summary: Missing countries parameter
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/capacity/latest/:
+    get:
+      operationId: capacity_latest_retrieve
+      description: Returns the most recent installed-capacity snapshot available for
+        a single country, optionally filtered by ENTSO-E production type.
+      summary: Latest capacity snapshot for one country
+      parameters:
+      - in: query
+        name: country
+        schema:
+          type: string
+        description: Two-letter ISO country code, for example `BG` or `DE`.
+        required: true
+      - in: query
+        name: psr
+        schema:
+          type: string
+        description: ENTSO-E production type code such as `B16` (solar) or `B18` (wind).
+      tags:
+      - Capacity
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapacityLatestResponse'
+              examples:
+                CapacitySnapshot:
+                  value:
+                    country: BG
+                    year: 2025
+                    items:
+                    - psr_type: B16
+                      psr_name: Solar
+                      installed_capacity_mw: '3021.000'
+                    - psr_type: B18
+                      psr_name: Wind Offshore
+                      installed_capacity_mw: '245.500'
+                  summary: Capacity snapshot
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                InvalidCountry:
+                  value:
+                    detail: Unknown country 'XX'. Make sure it's loaded in the DB.
+                  summary: Invalid country
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/chart-query/:
+    post:
+      operationId: chart_query_create
+      description: Accepts a natural-language message, runs the multi-step energy
+        agent, and returns either plain text or one or more chart specs.
+      summary: Chat with the energy agent
+      tags:
+      - Meta
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChartQueryRequest'
+            examples:
+              ChatRequest:
+                value:
+                  message: Compare RES generation for BG and RO for April. Daily resolution
+                summary: Chat request
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ChartQueryRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ChartQueryRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChartQueryResponse'
+              examples:
+                ChartResponse:
+                  value:
+                    conversation_id: 7d4d9300-4a6f-44be-b59f-7c648cc44062
+                    status: chart
+                    text: Showing RES generation for BG and RO for April as a line
+                      chart.
+                    charts:
+                    - title: BG vs RO renewable generation
+                      data_type: generation_res
+                      countries:
+                      - BG
+                      - RO
+                      series:
+                      - res
+                      include_prices: false
+                      start_utc: '2026-04-01T00:00:00Z'
+                      end_utc: '2026-04-30T00:00:00Z'
+                      resolution: d
+                      chart_type: line
+                  summary: Chart response
+                TextResponse:
+                  value:
+                    conversation_id: 7d4d9300-4a6f-44be-b59f-7c648cc44062
+                    status: text
+                    text: Which country and what time range should I use?
+                    charts: []
+                  summary: Text response
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/chat/:
+    post:
+      operationId: chat_create
+      description: Accepts a natural-language message, runs the multi-step energy
+        agent, and returns either plain text or one or more chart specs.
+      summary: Chat with the energy agent
+      tags:
+      - Meta
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChartQueryRequest'
+            examples:
+              ChatRequest:
+                value:
+                  message: Compare RES generation for BG and RO for April. Daily resolution
+                summary: Chat request
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ChartQueryRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ChartQueryRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChartQueryResponse'
+              examples:
+                ChartResponse:
+                  value:
+                    conversation_id: 7d4d9300-4a6f-44be-b59f-7c648cc44062
+                    status: chart
+                    text: Showing RES generation for BG and RO for April as a line
+                      chart.
+                    charts:
+                    - title: BG vs RO renewable generation
+                      data_type: generation_res
+                      countries:
+                      - BG
+                      - RO
+                      series:
+                      - res
+                      include_prices: false
+                      start_utc: '2026-04-01T00:00:00Z'
+                      end_utc: '2026-04-30T00:00:00Z'
+                      resolution: d
+                      chart_type: line
+                  summary: Chart response
+                TextResponse:
+                  value:
+                    conversation_id: 7d4d9300-4a6f-44be-b59f-7c648cc44062
+                    status: text
+                    text: Which country and what time range should I use?
+                    charts: []
+                  summary: Text response
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/flows/country-range/:
+    get:
+      operationId: flows_country_range_retrieve
+      description: Returns UTC buckets of physical flows in MW. Each directed EIC
+        border is averaged over its observed interval duration, then border averages
+        are summed. Positive net_mw means net imports (imports minus exports). Source
+        timestamps are interval starts. Ranges are start-inclusive and end-exclusive;
+        explicit boundaries retain minute precision. Buckets align to UTC clock boundaries.
+        Empty buckets are omitted, rather than filled with zero. is_partial flags
+        missing coverage among borders observed in the requested window; entirely
+        missing borders cannot be detected. Partial values average available observations
+        only. Missing source resolution uses the ingestion default PT15M. Source intervals
+        up to one day are supported. period=today stops at the latest completed UTC
+        quarter hour.
+      summary: Country import, export and net flow time series
+      parameters:
+      - in: query
+        name: country
+        schema:
+          type: string
+        description: Two-letter ISO country code, for example `BG` or `DE`.
+        required: true
+      - in: query
+        name: end
+        schema:
+          type: string
+          format: date-time
+        description: Exclusive range end in ISO-8601 UTC unless noted otherwise, for
+          example `2026-03-02T00:00:00Z`.
+      - in: query
+        name: period
+        schema:
+          type: string
+          enum:
+          - today
+          - yesterday
+        description: 'Shortcut for a predefined UTC window. Supported values: `today|yesterday`.'
+      - in: query
+        name: resolution
+        schema:
+          type: string
+          enum:
+          - 15m
+          - d
+          - h
+        description: UTC bucket size; defaults to h (hourly).
+      - in: query
+        name: start
+        schema:
+          type: string
+          format: date-time
+        description: Inclusive range start in ISO-8601 UTC, for example `2026-03-01T00:00:00Z`.
+      tags:
+      - Flows
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CountryFlowsRangeResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/flows/latest/:
+    get:
+      operationId: flows_latest_retrieve
+      description: Returns the latest available hourly flow window touching the requested
+        country, plus inbound/outbound totals and optional neighbor breakdowns.
+      summary: Latest physical flow window for one country
+      parameters:
+      - in: query
+        name: country
+        schema:
+          type: string
+        description: Two-letter ISO country code, for example `BG` or `DE`.
+        required: true
+      - in: query
+        name: neighbors
+        schema:
+          type: boolean
+        description: When `true`, include inbound, outbound, and net totals grouped
+          by neighboring country.
+      tags:
+      - Flows
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhysicalFlowsLatestResponse'
+              examples:
+                LatestFlowResponse:
+                  value:
+                    country: BG
+                    start_utc: '2026-03-10T09:00:00Z'
+                    end_utc: '2026-03-10T10:00:00Z'
+                    count: 2
+                    items:
+                    - datetime_utc: '2026-03-10T09:00:00Z'
+                      country_from: BG
+                      country_to: RO
+                      out_domain_eic: 10YCA-BULGARIA-R
+                      in_domain_eic: 10YRO-TEL------P
+                      resolution: PT60M
+                      quantity_mw: 320.0
+                      created_at: '2026-03-10T09:03:00Z'
+                    totals:
+                      in_mw: 180.0
+                      out_mw: 320.0
+                      net_mw: -140.0
+                    neighbors:
+                    - neighbor: RO
+                      in_mw: 180.0
+                      out_mw: 320.0
+                      net_mw: -140.0
+                  summary: Latest flow response
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                InvalidCountry:
+                  value:
+                    detail: Unknown country 'XX'. Make sure it's loaded in the DB.
+                  summary: Invalid country
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/flows/range/:
+    get:
+      operationId: flows_range_retrieve
+      description: Returns cross-border physical flows for a period or explicit UTC
+        window. Results can be filtered by source country, destination country, or
+        a country set.
+      summary: Physical flow range
+      parameters:
+      - in: query
+        name: countries
+        schema:
+          type: string
+        description: Comma-separated ISO country codes such as `BG,RO,GR`.
+      - in: query
+        name: end
+        schema:
+          type: string
+          format: date-time
+        description: Exclusive range end in ISO-8601 UTC unless noted otherwise, for
+          example `2026-03-02T00:00:00Z`.
+      - in: query
+        name: from
+        schema:
+          type: string
+        description: Filter by source country ISO code.
+      - in: query
+        name: period
+        schema:
+          type: string
+          enum:
+          - today
+          - yesterday
+        description: 'Shortcut for a predefined UTC window. Supported values: `today|yesterday`.'
+      - in: query
+        name: start
+        schema:
+          type: string
+          format: date-time
+        description: Inclusive range start in ISO-8601 UTC, for example `2026-03-01T00:00:00Z`.
+      - in: query
+        name: to
+        schema:
+          type: string
+        description: Filter by destination country ISO code.
+      tags:
+      - Flows
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhysicalFlowsRangeResponse'
+              examples:
+                FlowRangeResponse:
+                  value:
+                    start_utc: '2026-03-10T00:00:00Z'
+                    end_utc: '2026-03-10T03:00:00Z'
+                    count: 2
+                    items:
+                    - datetime_utc: '2026-03-10T01:00:00Z'
+                      country_from: BG
+                      country_to: RO
+                      out_domain_eic: 10YCA-BULGARIA-R
+                      in_domain_eic: 10YRO-TEL------P
+                      resolution: PT60M
+                      quantity_mw: 421.5
+                      created_at: '2026-03-10T01:05:00Z'
+                  summary: Flow range response
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                InvalidRange:
+                  value:
+                    detail: Provide start & end (ISO UTC, e.g. 2025-09-18T00:00:00Z)
+                      or use period=today|yesterday|dayahead.
+                  summary: Invalid range
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/generation-forecast/range/:
+    get:
+      operationId: generation_forecast_range_retrieve
+      description: Returns forecast generation by production type for a country, using
+        shortcut periods or an explicit UTC range.
+      summary: Generation forecast range for one country
+      parameters:
+      - in: query
+        name: country
+        schema:
+          type: string
+        description: Two-letter ISO country code, for example `BG` or `DE`.
+        required: true
+      - in: query
+        name: end
+        schema:
+          type: string
+          format: date-time
+        description: Exclusive range end in ISO-8601 UTC unless noted otherwise, for
+          example `2026-03-02T00:00:00Z`.
+      - in: query
+        name: period
+        schema:
+          type: string
+          enum:
+          - today
+          - yesterday
+        description: 'Shortcut for a predefined UTC window. Supported values: `today|yesterday`.'
+      - in: query
+        name: psr
+        schema:
+          type: string
+        description: ENTSO-E production type code such as `B16` (solar) or `B18` (wind).
+      - in: query
+        name: start
+        schema:
+          type: string
+          format: date-time
+        description: Inclusive range start in ISO-8601 UTC, for example `2026-03-01T00:00:00Z`.
+      tags:
+      - Generation
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationForecastResponse'
+              examples:
+                GenerationForecastResponse:
+                  value:
+                    country: CZ
+                    date_label: today (UTC)
+                    start_utc: '2026-03-10T00:00:00Z'
+                    end_utc: '2026-03-11T00:00:00Z'
+                    items:
+                    - country: CZ
+                      datetime_utc: '2026-03-10T10:00:00Z'
+                      psr_type: B16
+                      psr_name: Solar
+                      forecast_mw: '920.440'
+                      resolution: PT60M
+                  summary: Generation forecast response
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                InvalidRange:
+                  value:
+                    detail: Provide start & end (ISO UTC, e.g. 2025-09-18T00:00:00Z)
+                      or use period=today|yesterday|dayahead.
+                  summary: Invalid range
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/generation-irradiance/bulk-range/:
+    get:
+      operationId: generation_irradiance_bulk_range_retrieve
+      description: Returns hourly Open-Meteo global tilted irradiance points for multiple
+        countries. Use `countries=ALL` or omit the parameter to include all configured
+        countries from `COUNTRY_COORDS`. Geometry filters are optional; if omitted,
+        all stored tilt and azimuth combinations are returned.
+      summary: Global tilted irradiance range for multiple countries
+      parameters:
+      - in: query
+        name: azimuth
+        schema:
+          type: number
+        description: Optional panel azimuth filter in degrees. Omit to return all
+          stored azimuth values.
+      - in: query
+        name: countries
+        schema:
+          type: string
+        description: Comma-separated ISO country codes such as `BG,RO,GR`. Maximum
+          60 countries per request.
+      - in: query
+        name: end
+        schema:
+          type: string
+          format: date-time
+        description: Exclusive range end in ISO-8601 UTC unless noted otherwise, for
+          example `2026-03-02T00:00:00Z`.
+      - in: query
+        name: period
+        schema:
+          type: string
+          enum:
+          - today
+          - yesterday
+        description: 'Shortcut for a predefined UTC window. Supported values: `today|yesterday`.'
+      - in: query
+        name: start
+        schema:
+          type: string
+          format: date-time
+        description: Inclusive range start in ISO-8601 UTC, for example `2026-03-01T00:00:00Z`.
+      - in: query
+        name: tilt
+        schema:
+          type: number
+        description: Optional panel tilt filter in degrees. Omit to return all stored
+          tilt values.
+      tags:
+      - Generation
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TiltedIrradianceBulkResponse'
+              examples:
+                BulkTiltedIrradianceResponse:
+                  value:
+                    request_info:
+                      countries_requested:
+                      - BG
+                      - RO
+                      countries_found:
+                      - BG
+                      - RO
+                      countries_ignored: []
+                      tilt_degrees: null
+                      azimuth_degrees: null
+                      start_utc: '2026-03-19T00:00:00Z'
+                      end_utc: '2026-03-20T00:00:00Z'
+                      date_label: today (UTC)
+                      total_countries: 2
+                      total_records: 48
+                    data:
+                      BG:
+                        country: BG
+                        date_label: today (UTC)
+                        start_utc: '2026-03-19T00:00:00Z'
+                        end_utc: '2026-03-20T00:00:00Z'
+                        tilt_degrees: null
+                        azimuth_degrees: null
+                        items:
+                        - country: BG
+                          datetime_utc: '2026-03-19T10:00:00Z'
+                          tilt_degrees: '30.00'
+                          azimuth_degrees: '0.00'
+                          irradiance_wm2: 612.4
+                          resolution: PT1H
+                  summary: Bulk tilted irradiance response
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                TooManyCountries:
+                  value:
+                    detail: Maximum 60 countries per request
+                  summary: Too many countries
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/generation-irradiance/range/:
+    get:
+      operationId: generation_irradiance_range_retrieve
+      description: Returns hourly Open-Meteo global tilted irradiance points for one
+        country. The query can optionally be filtered by panel geometry using `tilt`
+        and `azimuth`. If omitted, all stored tilt and azimuth combinations are returned.
+      summary: Global tilted irradiance range for one country
+      parameters:
+      - in: query
+        name: azimuth
+        schema:
+          type: number
+        description: Optional panel azimuth filter in degrees. Omit to return all
+          stored azimuth values.
+      - in: query
+        name: country
+        schema:
+          type: string
+        description: Two-letter ISO country code, for example `BG` or `DE`.
+        required: true
+      - in: query
+        name: end
+        schema:
+          type: string
+          format: date-time
+        description: Exclusive range end in ISO-8601 UTC unless noted otherwise, for
+          example `2026-03-02T00:00:00Z`.
+      - in: query
+        name: period
+        schema:
+          type: string
+          enum:
+          - today
+          - yesterday
+        description: 'Shortcut for a predefined UTC window. Supported values: `today|yesterday`.'
+      - in: query
+        name: start
+        schema:
+          type: string
+          format: date-time
+        description: Inclusive range start in ISO-8601 UTC, for example `2026-03-01T00:00:00Z`.
+      - in: query
+        name: tilt
+        schema:
+          type: number
+        description: Optional panel tilt filter in degrees. Omit to return all stored
+          tilt values.
+      tags:
+      - Generation
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TiltedIrradianceResponse'
+              examples:
+                TiltedIrradianceResponse:
+                  value:
+                    country: BG
+                    date_label: today (UTC)
+                    start_utc: '2026-03-19T00:00:00Z'
+                    end_utc: '2026-03-20T00:00:00Z'
+                    tilt_degrees: null
+                    azimuth_degrees: null
+                    items:
+                    - country: BG
+                      datetime_utc: '2026-03-19T10:00:00Z'
+                      tilt_degrees: '30.00'
+                      azimuth_degrees: '0.00'
+                      irradiance_wm2: 612.4
+                      resolution: PT1H
+                  summary: Tilted irradiance response
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                InvalidCountry:
+                  value:
+                    detail: Unknown country 'XX'. Make sure it's loaded in the DB.
+                  summary: Invalid country
+                InvalidRange:
+                  value:
+                    detail: Provide start & end (ISO UTC, e.g. 2025-09-18T00:00:00Z)
+                      or use period=today|yesterday|dayahead.
+                  summary: Invalid range
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/generation-res/range/:
+    get:
+      operationId: generation_res_range_retrieve
+      description: Returns renewable generation by production type. The `psr` parameter
+        may contain one code or a comma-separated list.
+      summary: Renewable generation range for one country
+      parameters:
+      - in: query
+        name: country
+        schema:
+          type: string
+        description: Two-letter ISO country code, for example `BG` or `DE`.
+        required: true
+      - in: query
+        name: end
+        schema:
+          type: string
+          format: date-time
+        description: Exclusive range end in ISO-8601 UTC unless noted otherwise, for
+          example `2026-03-02T00:00:00Z`.
+      - in: query
+        name: local
+        schema:
+          type: boolean
+        description: When `true`, compute `yesterday` using the Django project timezone
+          instead of UTC.
+      - in: query
+        name: period
+        schema:
+          type: string
+          enum:
+          - today
+          - yesterday
+        description: 'Shortcut for a predefined UTC window. Supported values: `today|yesterday`.'
+      - in: query
+        name: psr
+        schema:
+          type: string
+        description: ENTSO-E production type code such as `B16` (solar) or `B18` (wind).
+          Comma-separated values are supported.
+      - in: query
+        name: start
+        schema:
+          type: string
+          format: date-time
+        description: Inclusive range start in ISO-8601 UTC, for example `2026-03-01T00:00:00Z`.
+      tags:
+      - Generation
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResGenerationResponse'
+              examples:
+                RenewableGenerationResponse:
+                  value:
+                    country: BG
+                    date_label: today (UTC)
+                    start_utc: '2026-03-10T00:00:00Z'
+                    end_utc: '2026-03-11T00:00:00Z'
+                    items:
+                    - country: BG
+                      datetime_utc: '2026-03-10T09:00:00Z'
+                      psr_type: B16
+                      psr_name: Solar
+                      generation_mw: '812.120'
+                      unit: MW
+                      resolution: PT60M
+                  summary: Renewable generation response
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                InvalidCountry:
+                  value:
+                    detail: Unknown country 'XX'. Make sure it's loaded in the DB.
+                  summary: Invalid country
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/generation-wind-speed/bulk-range/:
+    get:
+      operationId: generation_wind_speed_bulk_range_retrieve
+      description: Returns hourly Open-Meteo `wind_speed_120m` points for multiple
+        countries. Use `countries=ALL` or omit the parameter to include all configured
+        countries from `COUNTRY_COORDS`.
+      summary: 120m wind speed range for multiple countries
+      parameters:
+      - in: query
+        name: countries
+        schema:
+          type: string
+        description: Comma-separated ISO country codes such as `BG,RO,GR`. Maximum
+          60 countries per request.
+      - in: query
+        name: end
+        schema:
+          type: string
+          format: date-time
+        description: Exclusive range end in ISO-8601 UTC unless noted otherwise, for
+          example `2026-03-02T00:00:00Z`.
+      - in: query
+        name: period
+        schema:
+          type: string
+          enum:
+          - today
+          - yesterday
+        description: 'Shortcut for a predefined UTC window. Supported values: `today|yesterday`.'
+      - in: query
+        name: start
+        schema:
+          type: string
+          format: date-time
+        description: Inclusive range start in ISO-8601 UTC, for example `2026-03-01T00:00:00Z`.
+      tags:
+      - Generation
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WindSpeedBulkResponse'
+              examples:
+                BulkWindSpeedResponse:
+                  value:
+                    request_info:
+                      countries_requested:
+                      - BG
+                      - RO
+                      countries_found:
+                      - BG
+                      - RO
+                      countries_ignored: []
+                      start_utc: '2026-03-19T00:00:00Z'
+                      end_utc: '2026-03-20T00:00:00Z'
+                      date_label: today (UTC)
+                      total_countries: 2
+                      total_records: 48
+                    data:
+                      BG:
+                        country: BG
+                        date_label: today (UTC)
+                        start_utc: '2026-03-19T00:00:00Z'
+                        end_utc: '2026-03-20T00:00:00Z'
+                        items:
+                        - country: BG
+                          datetime_utc: '2026-03-19T10:00:00Z'
+                          wind_speed_120m: 8.7
+                          resolution: PT1H
+                  summary: Bulk wind speed response
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                TooManyCountries:
+                  value:
+                    detail: Maximum 60 countries per request
+                  summary: Too many countries
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/generation-wind-speed/range/:
+    get:
+      operationId: generation_wind_speed_range_retrieve
+      description: Returns hourly Open-Meteo `wind_speed_120m` points for one country.
+      summary: 120m wind speed range for one country
+      parameters:
+      - in: query
+        name: country
+        schema:
+          type: string
+        description: Two-letter ISO country code, for example `BG` or `DE`.
+        required: true
+      - in: query
+        name: end
+        schema:
+          type: string
+          format: date-time
+        description: Exclusive range end in ISO-8601 UTC unless noted otherwise, for
+          example `2026-03-02T00:00:00Z`.
+      - in: query
+        name: period
+        schema:
+          type: string
+          enum:
+          - today
+          - yesterday
+        description: 'Shortcut for a predefined UTC window. Supported values: `today|yesterday`.'
+      - in: query
+        name: start
+        schema:
+          type: string
+          format: date-time
+        description: Inclusive range start in ISO-8601 UTC, for example `2026-03-01T00:00:00Z`.
+      tags:
+      - Generation
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WindSpeedResponse'
+              examples:
+                WindSpeedResponse:
+                  value:
+                    country: BG
+                    date_label: today (UTC)
+                    start_utc: '2026-03-19T00:00:00Z'
+                    end_utc: '2026-03-20T00:00:00Z'
+                    items:
+                    - country: BG
+                      datetime_utc: '2026-03-19T10:00:00Z'
+                      wind_speed_120m: 8.7
+                      resolution: PT1H
+                  summary: Wind speed response
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                InvalidCountry:
+                  value:
+                    detail: Unknown country 'XX'. Make sure it's loaded in the DB.
+                  summary: Invalid country
+                InvalidRange:
+                  value:
+                    detail: Provide start & end (ISO UTC, e.g. 2025-09-18T00:00:00Z)
+                      or use period=today|yesterday|dayahead.
+                  summary: Invalid range
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/generation/bulk-range/:
+    get:
+      operationId: generation_bulk_range_retrieve
+      description: Returns actual generation for several countries in one request.
+        The `data` object is keyed by country code.
+      summary: Actual generation range for multiple countries
+      parameters:
+      - in: query
+        name: countries
+        schema:
+          type: string
+        description: Comma-separated ISO country codes such as `BG,RO,GR`. Maximum
+          20 countries per request.
+        required: true
+      - in: query
+        name: end
+        schema:
+          type: string
+          format: date-time
+        description: Exclusive range end in ISO-8601 UTC unless noted otherwise, for
+          example `2026-03-02T00:00:00Z`.
+      - in: query
+        name: local
+        schema:
+          type: boolean
+        description: When `true`, compute `yesterday` using the Django project timezone
+          instead of UTC.
+      - in: query
+        name: m
+        schema:
+          type: boolean
+        description: Legacy shortcut for monthly aggregation. Equivalent to `resolution=m`.
+      - in: query
+        name: period
+        schema:
+          type: string
+          enum:
+          - today
+          - yesterday
+        description: 'Shortcut for a predefined UTC window. Supported values: `today|yesterday`.'
+      - in: query
+        name: psr
+        schema:
+          type: string
+        description: ENTSO-E production type code such as `B16` (solar) or `B18` (wind).
+      - in: query
+        name: resolution
+        schema:
+          type: string
+          enum:
+          - d
+          - m
+          - y
+        description: Aggregate results by day (`d`), month (`m`), or year (`y`). Omit
+          for native source resolution.
+      - in: query
+        name: start
+        schema:
+          type: string
+          format: date-time
+        description: Inclusive range start in ISO-8601 UTC, for example `2026-03-01T00:00:00Z`.
+      tags:
+      - Generation
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationBulkResponse'
+              examples:
+                BulkGenerationResponse:
+                  value:
+                    request_info:
+                      countries_requested:
+                      - BG
+                      - RO
+                      countries_found:
+                      - BG
+                      - RO
+                      countries_ignored: []
+                      psr: B16
+                      resolution: d
+                      start_utc: '2026-03-01T00:00:00Z'
+                      end_utc: '2026-03-03T00:00:00Z'
+                      date_label: custom range
+                      total_countries: 2
+                      total_records: 4
+                    data:
+                      BG:
+                        country: BG
+                        date_label: custom range
+                        start_utc: '2026-03-01T00:00:00Z'
+                        end_utc: '2026-03-03T00:00:00Z'
+                        items:
+                        - datetime_utc: '2026-03-01T00:00:00Z'
+                          psr_type: B16
+                          psr_name: Solar
+                          generation_mw: '614.210'
+                          resolution: P1D
+                  summary: Bulk generation response
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                TooManyCountries:
+                  value:
+                    detail: Maximum 20 countries per request
+                  summary: Too many countries
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/generation/range/:
+    get:
+      operationId: generation_range_retrieve
+      description: Returns actual generation values for one country. Supports shortcut
+        periods or an explicit range, plus optional PSR filtering and daily/monthly/yearly
+        aggregation.
+      summary: Actual generation range for one country
+      parameters:
+      - in: query
+        name: country
+        schema:
+          type: string
+        description: Two-letter ISO country code, for example `BG` or `DE`.
+        required: true
+      - in: query
+        name: end
+        schema:
+          type: string
+          format: date-time
+        description: Exclusive range end in ISO-8601 UTC unless noted otherwise, for
+          example `2026-03-02T00:00:00Z`.
+      - in: query
+        name: local
+        schema:
+          type: boolean
+        description: When `true`, compute `yesterday` using the Django project timezone
+          instead of UTC.
+      - in: query
+        name: m
+        schema:
+          type: boolean
+        description: Legacy shortcut for monthly aggregation. Equivalent to `resolution=m`.
+      - in: query
+        name: period
+        schema:
+          type: string
+          enum:
+          - today
+          - yesterday
+        description: 'Shortcut for a predefined UTC window. Supported values: `today|yesterday`.'
+      - in: query
+        name: psr
+        schema:
+          type: string
+        description: ENTSO-E production type code such as `B16` (solar) or `B18` (wind).
+      - in: query
+        name: resolution
+        schema:
+          type: string
+          enum:
+          - d
+          - m
+          - y
+        description: Aggregate results by day (`d`), month (`m`), or year (`y`). Omit
+          for native source resolution.
+      - in: query
+        name: start
+        schema:
+          type: string
+          format: date-time
+        description: Inclusive range start in ISO-8601 UTC, for example `2026-03-01T00:00:00Z`.
+      tags:
+      - Generation
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationRangeResponse'
+              examples:
+                MonthlyGenerationAggregation:
+                  value:
+                    country: CZ
+                    date_label: custom range
+                    start_utc: '2026-01-01T00:00:00Z'
+                    end_utc: '2026-03-01T00:00:00Z'
+                    items:
+                    - datetime_utc: '2026-01-01T00:00:00Z'
+                      psr_type: B16
+                      psr_name: Solar
+                      generation_mw: '114.320'
+                      resolution: P1M
+                  summary: Monthly generation aggregation
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                InvalidRange:
+                  value:
+                    detail: Provide start & end (ISO UTC, e.g. 2025-09-18T00:00:00Z)
+                      or use period=today|yesterday|dayahead.
+                  summary: Invalid range
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/generation/yesterday/:
+    get:
+      operationId: generation_yesterday_retrieve
+      description: Returns actual generation points for the previous day. Set `local=true`
+        to interpret `yesterday` in the configured Django timezone instead of UTC.
+      summary: Yesterday generation for one country
+      parameters:
+      - in: query
+        name: country
+        schema:
+          type: string
+        description: Two-letter ISO country code, for example `BG` or `DE`.
+        required: true
+      - in: query
+        name: local
+        schema:
+          type: boolean
+        description: When `true`, compute `yesterday` using the Django project timezone
+          instead of UTC.
+      - in: query
+        name: psr
+        schema:
+          type: string
+        description: ENTSO-E production type code such as `B16` (solar) or `B18` (wind).
+      tags:
+      - Generation
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationRangeResponse'
+              examples:
+                YesterdayGeneration:
+                  value:
+                    country: CZ
+                    date_label: yesterday (UTC)
+                    start_utc: '2026-03-09T00:00:00Z'
+                    end_utc: '2026-03-10T00:00:00Z'
+                    items:
+                    - datetime_utc: '2026-03-09T00:00:00Z'
+                      psr_type: B16
+                      psr_name: Solar
+                      generation_mw: '0.000'
+                    - datetime_utc: '2026-03-09T00:15:00Z'
+                      psr_type: B18
+                      psr_name: Wind Offshore
+                      generation_mw: '412.600'
+                  summary: Yesterday generation
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                InvalidCountry:
+                  value:
+                    detail: Unknown country 'XX'. Make sure it's loaded in the DB.
+                  summary: Invalid country
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/prices/bulk-range/:
+    get:
+      operationId: prices_bulk_range_retrieve
+      description: Returns price time series for several countries in one request.
+        The `data` object is keyed by country code.
+      summary: Price series for multiple countries
+      parameters:
+      - in: query
+        name: contract
+        schema:
+          type: string
+          enum:
+          - A01
+          - A07
+        description: ENTSO-E contract type. `A01` is day-ahead and `A07` is intraday.
+      - in: query
+        name: countries
+        schema:
+          type: string
+        description: Comma-separated ISO country codes such as `BG,RO,GR`. Maximum
+          20 countries per request.
+        required: true
+      - in: query
+        name: end
+        schema:
+          type: string
+          format: date-time
+        description: Exclusive range end in ISO-8601 UTC unless noted otherwise, for
+          example `2026-03-02T00:00:00Z`.
+      - in: query
+        name: m
+        schema:
+          type: boolean
+        description: Legacy shortcut for monthly aggregation. Equivalent to `resolution=m`.
+      - in: query
+        name: period
+        schema:
+          type: string
+          enum:
+          - dayahead
+          - today
+          - yesterday
+        description: 'Shortcut for a predefined UTC window. Supported values: `today|yesterday|dayahead`.'
+      - in: query
+        name: resolution
+        schema:
+          type: string
+          enum:
+          - d
+          - m
+          - y
+        description: Aggregate results by day (`d`), month (`m`), or year (`y`). Omit
+          for native source resolution.
+      - in: query
+        name: start
+        schema:
+          type: string
+          format: date-time
+        description: Inclusive range start in ISO-8601 UTC, for example `2026-03-01T00:00:00Z`.
+      tags:
+      - Prices
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PriceBulkResponse'
+              examples:
+                BulkPriceResponse:
+                  value:
+                    request_info:
+                      countries_requested:
+                      - AT
+                      - DE
+                      countries_found:
+                      - AT
+                      - DE
+                      countries_ignored: []
+                      contract_type: A01
+                      resolution: d
+                      start_utc: '2026-03-01T00:00:00Z'
+                      end_utc: '2026-03-03T00:00:00Z'
+                      total_countries: 2
+                      total_records: 4
+                      server_elapsed_ms: 12.11
+                    data:
+                      AT:
+                        country: AT
+                        contract_type: A01
+                        start_utc: '2026-03-01T00:00:00Z'
+                        end_utc: '2026-03-03T00:00:00Z'
+                        items:
+                        - datetime_utc: '2026-03-01T00:00:00Z'
+                          price: '83.250000'
+                          currency: EUR
+                          unit: MWH
+                          resolution: P1D
+                  summary: Bulk price response
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                TooManyCountries:
+                  value:
+                    detail: Maximum 20 countries per request
+                  summary: Too many countries
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+  /api/prices/range/:
+    get:
+      operationId: prices_range_retrieve
+      description: Returns country price points for a UTC date window or shortcut
+        period. Results can be aggregated by day, month, or year.
+      summary: Price series for one country
+      parameters:
+      - in: query
+        name: contract
+        schema:
+          type: string
+          enum:
+          - A01
+          - A07
+        description: ENTSO-E contract type. `A01` is day-ahead and `A07` is intraday.
+      - in: query
+        name: country
+        schema:
+          type: string
+        description: Two-letter ISO country code, for example `BG` or `DE`.
+        required: true
+      - in: query
+        name: end
+        schema:
+          type: string
+          format: date-time
+        description: Exclusive range end in ISO-8601 UTC unless noted otherwise, for
+          example `2026-03-02T00:00:00Z`.
+      - in: query
+        name: m
+        schema:
+          type: boolean
+        description: Legacy shortcut for monthly aggregation. Equivalent to `resolution=m`.
+      - in: query
+        name: period
+        schema:
+          type: string
+          enum:
+          - dayahead
+          - today
+          - yesterday
+        description: 'Shortcut for a predefined UTC window. Supported values: `today|yesterday|dayahead`.'
+      - in: query
+        name: resolution
+        schema:
+          type: string
+          enum:
+          - d
+          - m
+          - y
+        description: Aggregate results by day (`d`), month (`m`), or year (`y`). Omit
+          for native source resolution.
+      - in: query
+        name: start
+        schema:
+          type: string
+          format: date-time
+        description: Inclusive range start in ISO-8601 UTC, for example `2026-03-01T00:00:00Z`.
+      tags:
+      - Prices
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PriceRangeResponse'
+              examples:
+                DailyPriceAggregation:
+                  value:
+                    country: AT
+                    contract_type: A01
+                    start_utc: '2026-03-01T00:00:00Z'
+                    end_utc: '2026-03-03T00:00:00Z'
+                    items:
+                    - datetime_utc: '2026-03-01T00:00:00Z'
+                      price: '83.250000'
+                      currency: EUR
+                      unit: MWH
+                      resolution: P1D
+                  summary: Daily price aggregation
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                InvalidRange:
+                  value:
+                    detail: Provide start & end (ISO UTC, e.g. 2025-09-18T00:00:00Z)
+                      or use period=today|yesterday|dayahead.
+                  summary: Invalid range
+          description: The request parameters were missing, invalid, or internally
+            inconsistent.
+components:
+  schemas:
+    AccessTokenResponse:
+      type: object
+      properties:
+        access:
+          type: string
+      required:
+      - access
+    ActivationPendingResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+      required:
+      - detail
+    ApiRootResponse:
+      type: object
+      properties:
+        auth_register:
+          type: string
+          format: uri
+        auth_login:
+          type: string
+          format: uri
+        auth_refresh:
+          type: string
+          format: uri
+        auth_me:
+          type: string
+          format: uri
+        capacity_latest:
+          type: string
+          format: uri
+        capacity_bulk_latest:
+          type: string
+          format: uri
+        generation_yesterday:
+          type: string
+          format: uri
+        chart_query:
+          type: string
+          format: uri
+        prices_range:
+          type: string
+          format: uri
+        price_bulk:
+          type: string
+          format: uri
+        generation_range:
+          type: string
+          format: uri
+        generation_res_range:
+          type: string
+          format: uri
+        generation_bulk_range:
+          type: string
+          format: uri
+        generation_forecast_range:
+          type: string
+          format: uri
+        generation_irradiance_range:
+          type: string
+          format: uri
+        generation_irradiance_bulk_range:
+          type: string
+          format: uri
+        generation_wind_speed_range:
+          type: string
+          format: uri
+        generation_wind_speed_bulk_range:
+          type: string
+          format: uri
+        flows_range:
+          type: string
+          format: uri
+        flows_country_range:
+          type: string
+          format: uri
+        flows_latest:
+          type: string
+          format: uri
+        schema:
+          type: string
+          format: uri
+        swagger_ui:
+          type: string
+          format: uri
+        redoc:
+          type: string
+          format: uri
+      required:
+      - auth_login
+      - auth_me
+      - auth_refresh
+      - auth_register
+      - capacity_bulk_latest
+      - capacity_latest
+      - chart_query
+      - flows_country_range
+      - flows_latest
+      - flows_range
+      - generation_bulk_range
+      - generation_forecast_range
+      - generation_irradiance_bulk_range
+      - generation_irradiance_range
+      - generation_range
+      - generation_res_range
+      - generation_wind_speed_bulk_range
+      - generation_wind_speed_range
+      - generation_yesterday
+      - price_bulk
+      - prices_range
+      - redoc
+      - schema
+      - swagger_ui
+    AuthSuccessResponse:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/AuthUserResponse'
+        access:
+          type: string
+        refresh:
+          type: string
+      required:
+      - access
+      - refresh
+      - user
+    AuthUserResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+        email:
+          type: string
+          format: email
+        first_name:
+          type: string
+        last_name:
+          type: string
+      required:
+      - email
+      - first_name
+      - id
+      - last_name
+    CapacityBulkRequestInfo:
+      type: object
+      properties:
+        countries_requested:
+          type: array
+          items:
+            type: string
+        countries_found:
+          type: array
+          items:
+            type: string
+        countries_ignored:
+          type: array
+          items:
+            type: string
+        psr:
+          type: string
+          nullable: true
+        total_countries:
+          type: integer
+        total_records:
+          type: integer
+        server_elapsed_ms:
+          type: number
+          format: double
+      required:
+      - countries_found
+      - countries_ignored
+      - countries_requested
+      - server_elapsed_ms
+      - total_countries
+      - total_records
+    CapacityBulkResponse:
+      type: object
+      properties:
+        request_info:
+          $ref: '#/components/schemas/CapacityBulkRequestInfo'
+        data:
+          description: Object keyed by country ISO code. Each value matches the single-country
+            capacity response.
+      required:
+      - data
+      - request_info
+    CapacityItem:
+      type: object
+      properties:
+        psr_type:
+          type: string
+        psr_name:
+          type: string
+        installed_capacity_mw:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,11}(?:\.\d{0,3})?$
+          nullable: true
+      required:
+      - installed_capacity_mw
+      - psr_name
+      - psr_type
+    CapacityLatestResponse:
+      type: object
+      properties:
+        country:
+          type: string
+        year:
+          type: integer
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CapacityItem'
+      required:
+      - country
+      - items
+      - year
+    ChartQueryChart:
+      type: object
+      properties:
+        title:
+          type: string
+          nullable: true
+        data_type:
+          type: string
+        countries:
+          type: array
+          items:
+            type: string
+        series:
+          type: array
+          items:
+            type: string
+        include_prices:
+          type: boolean
+        start_utc:
+          type: string
+          format: date-time
+        end_utc:
+          type: string
+          format: date-time
+        resolution:
+          type: string
+        chart_type:
+          type: string
+        country_from:
+          type: string
+        country_to:
+          type: string
+      required:
+      - chart_type
+      - countries
+      - data_type
+      - end_utc
+      - include_prices
+      - resolution
+      - series
+      - start_utc
+    ChartQueryRequest:
+      type: object
+      properties:
+        message:
+          type: string
+          description: Simple text query, for example 'Show RES generation for BG
+            for the last 7 days'.
+        conversation_id:
+          type: string
+          description: Optional conversation identifier. When provided, the backend
+            loads prior agent turns from cache and uses them as context for follow-up
+            messages.
+      required:
+      - message
+    ChartQueryResponse:
+      type: object
+      properties:
+        conversation_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/StatusEnum'
+        text:
+          type: string
+        charts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChartQueryChart'
+      required:
+      - charts
+      - conversation_id
+      - status
+      - text
+    CountryFlowPoint:
+      type: object
+      properties:
+        datetime_utc:
+          type: string
+          format: date-time
+          description: UTC bucket start.
+        imports_mw:
+          type: number
+          format: double
+        exports_mw:
+          type: number
+          format: double
+        net_mw:
+          type: number
+          format: double
+          description: Imports minus exports; positive means net importing.
+        is_partial:
+          type: boolean
+          description: Incomplete time coverage for at least one directed border observed
+            in this request. Entirely absent borders cannot be detected.
+      required:
+      - datetime_utc
+      - exports_mw
+      - imports_mw
+      - is_partial
+      - net_mw
+    CountryFlowsRangeResponse:
+      type: object
+      properties:
+        country:
+          type: string
+        start_utc:
+          type: string
+          format: date-time
+        end_utc:
+          type: string
+          format: date-time
+        resolution:
+          $ref: '#/components/schemas/ResolutionEnum'
+        unit:
+          type: string
+        count:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CountryFlowPoint'
+      required:
+      - count
+      - country
+      - end_utc
+      - items
+      - resolution
+      - start_utc
+      - unit
+    CountryGenerationForecastByType:
+      type: object
+      properties:
+        country:
+          type: string
+          readOnly: true
+        datetime_utc:
+          type: string
+          format: date-time
+        psr_type:
+          type: string
+          maxLength: 4
+        psr_name:
+          type: string
+          maxLength: 64
+        forecast_mw:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,11}(?:\.\d{0,3})?$
+          nullable: true
+        resolution:
+          type: string
+          maxLength: 16
+      required:
+      - country
+      - datetime_utc
+      - psr_type
+    CountryResGenerationByType:
+      type: object
+      properties:
+        country:
+          type: string
+          readOnly: true
+        datetime_utc:
+          type: string
+          format: date-time
+        psr_type:
+          type: string
+          maxLength: 4
+        psr_name:
+          type: string
+          maxLength: 64
+        generation_mw:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,11}(?:\.\d{0,3})?$
+          nullable: true
+        unit:
+          type: string
+          maxLength: 8
+        resolution:
+          type: string
+          maxLength: 16
+      required:
+      - country
+      - datetime_utc
+      - psr_type
+    CountryTiltedIrradiancePoint:
+      type: object
+      properties:
+        country:
+          type: string
+          readOnly: true
+        datetime_utc:
+          type: string
+          format: date-time
+        tilt_degrees:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+        azimuth_degrees:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,4}(?:\.\d{0,2})?$
+          default: '0.00'
+        irradiance_wm2:
+          type: number
+          format: double
+          nullable: true
+        resolution:
+          type: string
+          maxLength: 16
+      required:
+      - country
+      - datetime_utc
+      - tilt_degrees
+    CountryWindSpeedPoint:
+      type: object
+      properties:
+        country:
+          type: string
+          readOnly: true
+        datetime_utc:
+          type: string
+          format: date-time
+        wind_speed_120m:
+          type: number
+          format: double
+          nullable: true
+        resolution:
+          type: string
+          maxLength: 16
+      required:
+      - country
+      - datetime_utc
+    ErrorResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+          description: Validation or request error message.
+      required:
+      - detail
+    FlowTotals:
+      type: object
+      properties:
+        in_mw:
+          type: number
+          format: double
+        out_mw:
+          type: number
+          format: double
+        net_mw:
+          type: number
+          format: double
+      required:
+      - in_mw
+      - net_mw
+      - out_mw
+    GenerationBulkRequestInfo:
+      type: object
+      properties:
+        countries_requested:
+          type: array
+          items:
+            type: string
+        countries_found:
+          type: array
+          items:
+            type: string
+        countries_ignored:
+          type: array
+          items:
+            type: string
+        psr:
+          type: string
+          nullable: true
+        resolution:
+          type: string
+          nullable: true
+        start_utc:
+          type: string
+          format: date-time
+        end_utc:
+          type: string
+          format: date-time
+        date_label:
+          type: string
+        total_countries:
+          type: integer
+        total_records:
+          type: integer
+      required:
+      - countries_found
+      - countries_ignored
+      - countries_requested
+      - date_label
+      - end_utc
+      - start_utc
+      - total_countries
+      - total_records
+    GenerationBulkResponse:
+      type: object
+      properties:
+        request_info:
+          $ref: '#/components/schemas/GenerationBulkRequestInfo'
+        data:
+          description: Object keyed by country ISO code. Each value matches the single-country
+            generation range shape.
+      required:
+      - data
+      - request_info
+    GenerationForecastResponse:
+      type: object
+      properties:
+        country:
+          type: string
+        date_label:
+          type: string
+        start_utc:
+          type: string
+          format: date-time
+        end_utc:
+          type: string
+          format: date-time
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CountryGenerationForecastByType'
+      required:
+      - country
+      - date_label
+      - end_utc
+      - items
+      - start_utc
+    GenerationItem:
+      type: object
+      properties:
+        datetime_utc:
+          type: string
+          format: date-time
+        psr_type:
+          type: string
+        psr_name:
+          type: string
+        generation_mw:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,11}(?:\.\d{0,3})?$
+          nullable: true
+        resolution:
+          type: string
+      required:
+      - datetime_utc
+      - generation_mw
+      - psr_name
+      - psr_type
+    GenerationRangeResponse:
+      type: object
+      properties:
+        country:
+          type: string
+        date_label:
+          type: string
+        start_utc:
+          type: string
+          format: date-time
+        end_utc:
+          type: string
+          format: date-time
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/GenerationItem'
+      required:
+      - country
+      - date_label
+      - end_utc
+      - items
+      - start_utc
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+      required:
+      - email
+      - password
+    NeighborFlow:
+      type: object
+      properties:
+        neighbor:
+          type: string
+        in_mw:
+          type: number
+          format: double
+        out_mw:
+          type: number
+          format: double
+        net_mw:
+          type: number
+          format: double
+      required:
+      - in_mw
+      - neighbor
+      - net_mw
+      - out_mw
+    PhysicalFlow:
+      type: object
+      properties:
+        datetime_utc:
+          type: string
+          format: date-time
+        country_from:
+          type: string
+          readOnly: true
+        country_to:
+          type: string
+          readOnly: true
+        out_domain_eic:
+          type: string
+          nullable: true
+          maxLength: 32
+        in_domain_eic:
+          type: string
+          nullable: true
+          maxLength: 32
+        resolution:
+          type: string
+          nullable: true
+          maxLength: 16
+        quantity_mw:
+          type: number
+          format: double
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - country_from
+      - country_to
+      - created_at
+      - datetime_utc
+      - quantity_mw
+    PhysicalFlowsLatestResponse:
+      type: object
+      properties:
+        country:
+          type: string
+        start_utc:
+          type: string
+          format: date-time
+          nullable: true
+        end_utc:
+          type: string
+          format: date-time
+          nullable: true
+        count:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PhysicalFlow'
+        totals:
+          $ref: '#/components/schemas/FlowTotals'
+        neighbors:
+          type: array
+          items:
+            $ref: '#/components/schemas/NeighborFlow'
+      required:
+      - country
+      - items
+      - totals
+    PhysicalFlowsRangeResponse:
+      type: object
+      properties:
+        start_utc:
+          type: string
+          format: date-time
+        end_utc:
+          type: string
+          format: date-time
+        count:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PhysicalFlow'
+      required:
+      - count
+      - end_utc
+      - items
+      - start_utc
+    PriceBulkRequestInfo:
+      type: object
+      properties:
+        countries_requested:
+          type: array
+          items:
+            type: string
+        countries_found:
+          type: array
+          items:
+            type: string
+        countries_ignored:
+          type: array
+          items:
+            type: string
+        contract_type:
+          type: string
+        resolution:
+          type: string
+          nullable: true
+        start_utc:
+          type: string
+          format: date-time
+        end_utc:
+          type: string
+          format: date-time
+        total_countries:
+          type: integer
+        total_records:
+          type: integer
+        server_elapsed_ms:
+          type: number
+          format: double
+      required:
+      - contract_type
+      - countries_found
+      - countries_ignored
+      - countries_requested
+      - end_utc
+      - server_elapsed_ms
+      - start_utc
+      - total_countries
+      - total_records
+    PriceBulkResponse:
+      type: object
+      properties:
+        request_info:
+          $ref: '#/components/schemas/PriceBulkRequestInfo'
+        data:
+          description: Object keyed by country ISO code. Each value matches the single-country
+            price response.
+      required:
+      - data
+      - request_info
+    PriceItem:
+      type: object
+      properties:
+        datetime_utc:
+          type: string
+          format: date-time
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,6})?$
+          nullable: true
+        currency:
+          type: string
+        unit:
+          type: string
+        resolution:
+          type: string
+      required:
+      - currency
+      - datetime_utc
+      - price
+      - resolution
+      - unit
+    PriceRangeResponse:
+      type: object
+      properties:
+        country:
+          type: string
+        contract_type:
+          type: string
+        start_utc:
+          type: string
+          format: date-time
+        end_utc:
+          type: string
+          format: date-time
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PriceItem'
+      required:
+      - contract_type
+      - country
+      - end_utc
+      - items
+      - start_utc
+    RefreshRequest:
+      type: object
+      properties:
+        refresh:
+          type: string
+      required:
+      - refresh
+    RegisterRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+        first_name:
+          type: string
+        last_name:
+          type: string
+      required:
+      - email
+      - password
+    ResGenerationResponse:
+      type: object
+      properties:
+        country:
+          type: string
+        date_label:
+          type: string
+        start_utc:
+          type: string
+          format: date-time
+        end_utc:
+          type: string
+          format: date-time
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CountryResGenerationByType'
+      required:
+      - country
+      - date_label
+      - end_utc
+      - items
+      - start_utc
+    ResolutionEnum:
+      enum:
+      - 15m
+      - h
+      - d
+      type: string
+      description: |-
+        * `15m` - 15m
+        * `h` - h
+        * `d` - d
+    StatusEnum:
+      enum:
+      - chart
+      - text
+      type: string
+      description: |-
+        * `chart` - chart
+        * `text` - text
+    TiltedIrradianceBulkRequestInfo:
+      type: object
+      properties:
+        countries_requested:
+          type: array
+          items:
+            type: string
+        countries_found:
+          type: array
+          items:
+            type: string
+        countries_ignored:
+          type: array
+          items:
+            type: string
+        tilt_degrees:
+          type: number
+          format: double
+          nullable: true
+        azimuth_degrees:
+          type: number
+          format: double
+          nullable: true
+        start_utc:
+          type: string
+          format: date-time
+        end_utc:
+          type: string
+          format: date-time
+        date_label:
+          type: string
+        total_countries:
+          type: integer
+        total_records:
+          type: integer
+      required:
+      - countries_found
+      - countries_ignored
+      - countries_requested
+      - date_label
+      - end_utc
+      - start_utc
+      - total_countries
+      - total_records
+    TiltedIrradianceBulkResponse:
+      type: object
+      properties:
+        request_info:
+          $ref: '#/components/schemas/TiltedIrradianceBulkRequestInfo'
+        data:
+          description: Object keyed by country ISO code. Each value matches the single-country
+            irradiance response shape.
+      required:
+      - data
+      - request_info
+    TiltedIrradianceResponse:
+      type: object
+      properties:
+        country:
+          type: string
+        date_label:
+          type: string
+        start_utc:
+          type: string
+          format: date-time
+        end_utc:
+          type: string
+          format: date-time
+        tilt_degrees:
+          type: number
+          format: double
+          nullable: true
+        azimuth_degrees:
+          type: number
+          format: double
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CountryTiltedIrradiancePoint'
+      required:
+      - country
+      - date_label
+      - end_utc
+      - items
+      - start_utc
+    WindSpeedBulkRequestInfo:
+      type: object
+      properties:
+        countries_requested:
+          type: array
+          items:
+            type: string
+        countries_found:
+          type: array
+          items:
+            type: string
+        countries_ignored:
+          type: array
+          items:
+            type: string
+        start_utc:
+          type: string
+          format: date-time
+        end_utc:
+          type: string
+          format: date-time
+        date_label:
+          type: string
+        total_countries:
+          type: integer
+        total_records:
+          type: integer
+      required:
+      - countries_found
+      - countries_ignored
+      - countries_requested
+      - date_label
+      - end_utc
+      - start_utc
+      - total_countries
+      - total_records
+    WindSpeedBulkResponse:
+      type: object
+      properties:
+        request_info:
+          $ref: '#/components/schemas/WindSpeedBulkRequestInfo'
+        data:
+          description: Object keyed by country ISO code. Each value matches the single-country
+            wind-speed response shape.
+      required:
+      - data
+      - request_info
+    WindSpeedResponse:
+      type: object
+      properties:
+        country:
+          type: string
+        date_label:
+          type: string
+        start_utc:
+          type: string
+          format: date-time
+        end_utc:
+          type: string
+          format: date-time
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CountryWindSpeedPoint'
+      required:
+      - country
+      - date_label
+      - end_utc
+      - items
+      - start_utc
+  securitySchemes:
+    jwtAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+tags:
+- name: Meta
+  description: Discovery and documentation endpoints.
+- name: Capacity
+  description: Installed generation capacity snapshots.
+- name: Prices
+  description: Country price time series and aggregates.
+- name: Generation
+  description: Actual and forecast generation endpoints.
+- name: Flows
+  description: Cross-border physical power flows.

@@ -61,6 +61,16 @@ def post_with_retry(
         try:
             return post(tgt, path, body)
         except requests.RequestException as e:
+            response = getattr(e, "response", None)
+            if path == "/v1/markets/dam/data/mcp" and response is not None and response.status_code == 400:
+                try:
+                    errors = response.json().get("errors") or []
+                except ValueError:
+                    errors = []
+                if any(item.get("errorCode") in {"SEF1124", "(BUS)SEF1124"} for item in errors):
+                    if log:
+                        log("EPİAŞ day-ahead prices have not been published yet (SEF1124).")
+                    return {"items": []}
             if attempt == max_retries - 1:
                 raise CommandError(f"EPİAŞ request {path} failed: {e}")
             wait = 2 ** attempt

@@ -856,14 +856,8 @@ class EntsoePrices:
         return d.astimezone(dt.timezone.utc)
 
     def _request_with_retries(self, params: dict) -> str:
-        """GET with retry/backoff; ALWAYS return response text (XML string)."""        
-        try:
-            r = self.session.get(BASE_URL, params=params)
-            # success
-            if r.status_code == 200:
-                return r.text
-        except Exception as e:     
-            print(f"ENTSO-E request failed: {e}")
+        """Use the bounded ENTSO-E request policy shared with generation."""
+        return EntsoeGenerationByType._request_with_retries(self, params)
 
     @staticmethod
     def _iso8601_duration_to_minutes(duration: str) -> int:

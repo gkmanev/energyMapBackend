@@ -72,8 +72,8 @@ def fetch_generation_forecast_hourly_task(self):
 
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
 def fetch_generation_hourly_task(self):
-    """Fetch actual generation using a 24h sliding window each hour."""
-    start_iso, end_iso = _local_daily_window(ZoneInfo("Europe/Sofia"))
+    """Fetch a rolling 48h window, including late previous-day generation."""
+    start_iso, end_iso = _hourly_window(hours_back=48)
     logger.info("Hourly generation window: %s -> %s", start_iso, end_iso)
     call_command("fetch_generation", start=start_iso, end=end_iso)
 

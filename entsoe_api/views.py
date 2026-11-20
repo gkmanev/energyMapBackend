@@ -20,7 +20,7 @@ from django.views.decorators.cache import cache_page
 from django.shortcuts import redirect
 from django.db.models import Avg, Count, Max, Min, Q
 from django.db.models.functions import TruncDay, TruncMonth, TruncYear
-from drf_spectacular.utils import OpenApiExample, extend_schema
+from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema
 from rest_framework.views import APIView
 from rest_framework.decorators import api_view
 from rest_framework.permissions import IsAuthenticated
@@ -52,6 +52,7 @@ from entsoe_api.serializers import (
     RegisterSerializer,
 )
 from .api_docs import (
+    CountryFlowsRangeResponseSerializer,
     AccessTokenResponseSerializer,
     ActivationPendingResponseSerializer,
     AuthSuccessResponseSerializer,
@@ -98,6 +99,7 @@ from .api_docs import (
 from .agent import run_energy_agent
 from .conversation import append_turn, generate_conversation_id, load_history
 from .email_activation import activation_token_generator, send_activation_email
+from .flow_series import RESOLUTIONS as FLOW_RESOLUTIONS, build_flow_series
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -657,6 +659,7 @@ def _flow_field_names() -> Tuple[str, str, str]:
                 "generation_wind_speed_range": "https://api.example.com/api/generation-wind-speed/range/",
                 "generation_wind_speed_bulk_range": "https://api.example.com/api/generation-wind-speed/bulk-range/",
                 "flows_range": "https://api.example.com/api/flows/range/",
+                "flows_country_range": "https://api.example.com/api/flows/country-range/",
                 "flows_latest": "https://api.example.com/api/flows/latest/",
                 "schema": "https://api.example.com/api/schema/",
                 "swagger_ui": "https://api.example.com/api/docs/swagger/",
@@ -687,6 +690,7 @@ def api_root(request, format=None):
         "generation_wind_speed_range": request.build_absolute_uri(reverse("generation-wind-speed-range")),
         "generation_wind_speed_bulk_range": request.build_absolute_uri(reverse("generation-wind-speed-bulk-range")),
         "flows_range": request.build_absolute_uri(reverse("flows-range")),
+        "flows_country_range": request.build_absolute_uri(reverse("flows-country-range")),
         "flows_latest": request.build_absolute_uri(reverse("flows-latest")),
         "schema": request.build_absolute_uri(reverse("schema")),
         "swagger_ui": request.build_absolute_uri(reverse("swagger-ui")),
@@ -2735,6 +2739,68 @@ class CountryGenerationBulkRangeView(APIView):
 
 
 # ─────────────────────────────── Physical Flows ────────────────────────────────
+
+class CountryFlowsRangeView(APIView):
+    @extend_schema(
+        tags=["Flows"],
+        summary="Country import, export and net flow time series",
+        description=(
+            "Returns UTC buckets of physical flows in MW. Each directed EIC border is "
+            "averaged over its observed interval duration, then border averages are summed. "
+            "Positive net_mw means net imports (imports minus exports). "
+            "Source timestamps are interval starts. Ranges are start-inclusive and end-exclusive; "
+            "explicit boundaries retain minute precision. Buckets align to UTC clock boundaries. "
+            "Empty buckets are omitted, rather than filled with zero. is_partial flags missing "
+            "coverage among borders observed in the requested window; entirely missing borders "
+            "cannot be detected. Partial values average available observations only. Missing "
+            "source resolution uses the ingestion default PT15M. Source intervals up to one day "
+            "are supported. period=today stops at the latest completed UTC quarter hour."
+        ),
+        parameters=[country_parameter(), period_parameter(), START_PARAMETER, END_PARAMETER,
+                    OpenApiParameter(name="resolution", type=str, enum=["15m", "h", "d"],
+                                     description="UTC bucket size; defaults to h (hourly).")],
+        responses={200: CountryFlowsRangeResponseSerializer, 400: BAD_REQUEST_RESPONSE},
+    )
+    def get(self, request):
+        params = request.query_params
+        resolution = params.get("resolution", "h").lower().strip()
+        try:
+            country = _get_country_or_400((params.get("country") or "").upper().strip())
+            if resolution not in FLOW_RESOLUTIONS:
+                raise ValueError("resolution must be 15m, h or d.")
+            period = (params.get("period") or "").lower().strip()
+            if period:
+                if period not in {"today", "yesterday"}:
+                    raise ValueError("period must be today or yesterday.")
+                if params.get("start") or params.get("end"):
+                    raise ValueError("Provide either period or start/end, not both.")
+                start, end, _ = _compute_window_utc(period, None, None)
+                if period == "today":
+                    end = min(end, _floor_15min(_now_utc()))
+            else:
+                if not params.get("start") or not params.get("end"):
+                    raise ValueError("Provide start and end, or period=today|yesterday.")
+                start = parse_datetime(params["start"])
+                end = parse_datetime(params["end"])
+                if start is None or end is None:
+                    raise ValueError("start and end must be ISO-8601 dates or datetimes.")
+                start, end = _ensure_utc(start), _ensure_utc(end)
+            if start > end or (start == end and period != "today"):
+                raise ValueError("start must be earlier than end.")
+            # Include intervals starting before the request and overlapping its start.
+            rows = (PhysicalFlow.objects
+                    .filter(Q(country_from_id=country.pk) | Q(country_to_id=country.pk),
+                            datetime_utc__gte=start - dt.timedelta(days=1), datetime_utc__lt=end)
+                    .exclude(country_from_id=country.pk, country_to_id=country.pk)
+                    .values("datetime_utc", "country_from_id", "country_to_id",
+                            "out_domain_eic", "in_domain_eic", "quantity_mw", "resolution"))
+            items = build_flow_series(rows.iterator(), country.pk, start, end, resolution)
+        except (ValueError, TypeError, OverflowError) as exc:
+            return Response({"detail": str(exc)}, status=400)
+        return Response({"country": country.pk, "start_utc": _fmt_z(start),
+                         "end_utc": _fmt_z(end), "resolution": resolution,
+                         "unit": "MW", "count": len(items), "items": items})
+
 
 class PhysicalFlowsRangeView(APIView):
     """
