@@ -1,9 +1,67 @@
 import datetime as dt
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
+
+from .entsoe_data import EntsoePhysicalFlows
 
 from .models import Country, PhysicalFlow
+
+
+class PhysicalFlowCurveTests(SimpleTestCase):
+    def period(self, start, end, points, resolution="PT60M"):
+        point_xml = "".join(
+            f"<Point><position>{position}</position>"
+            + (f"<quantity>{quantity}</quantity>" if quantity is not None else "")
+            + "</Point>" for position, quantity in points
+        )
+        return (f"<Period><timeInterval><start>{start}</start><end>{end}</end></timeInterval>"
+                f"<resolution>{resolution}</resolution>{point_xml}</Period>")
+
+    def parse(self, periods, curve="A03", namespace=True):
+        ns = ' xmlns="urn:iec62325:physical-flows"' if namespace else ""
+        curve_xml = f"<curveType>{curve}</curveType>" if curve else ""
+        xml = (f"<Publication_MarketDocument{ns}><TimeSeries>{curve_xml}"
+               f"{periods}</TimeSeries></Publication_MarketDocument>")
+        return EntsoePhysicalFlows._parse_a11(xml, "BG", "GR")
+
+    def test_a03_expands_change_positions_including_trailing_zero(self):
+        period = self.period("2026-11-20T00:00Z", "2026-11-20T06:00Z", [(1, 100), (3, 0)])
+        for namespace in (True, False):
+            with self.subTest(namespace=namespace):
+                rows = self.parse(period, namespace=namespace)
+                self.assertEqual([r["quantity_mw"] for r in rows], [100, 100, 0, 0, 0, 0])
+                self.assertEqual([r["datetime_utc"].hour for r in rows], list(range(6)))
+                self.assertEqual({r["resolution"] for r in rows}, {"PT60M"})
+
+    def test_a03_expansion_respects_period_gaps_and_missing_quantity(self):
+        periods = self.period("2026-11-20T00:00Z", "2026-11-20T04:00Z",
+                              [(1, 100), (2, None), (4, 50)])
+        periods += self.period("2026-11-20T06:00Z", "2026-11-20T08:00Z", [(1, 25)])
+        rows = self.parse(periods)
+        self.assertEqual([r["datetime_utc"].hour for r in rows], [0, 3, 6, 7])
+        self.assertEqual([r["quantity_mw"] for r in rows], [100, 50, 25, 25])
+
+    def test_a01_and_legacy_curves_do_not_fill_unreported_positions(self):
+        period = self.period("2026-11-20T00:00Z", "2026-11-20T06:00Z", [(1, 100), (3, 0)])
+        for curve in ("A01", ""):
+            with self.subTest(curve=curve):
+                rows = self.parse(period, curve=curve)
+                self.assertEqual([r["datetime_utc"].hour for r in rows], [0, 2])
+
+    def test_a03_quarter_hour_positions_are_sorted_and_not_backfilled(self):
+        period = self.period("2026-11-20T00:00Z", "2026-11-20T01:00Z",
+                             [(4, 0), (2, 25)], resolution="PT15M")
+        rows = self.parse(period)
+        self.assertEqual([r["datetime_utc"].minute for r in rows], [15, 30, 45])
+        self.assertEqual([r["quantity_mw"] for r in rows], [25, 25, 0])
+
+    def test_a03_single_zero_spans_full_period(self):
+        period = self.period("2026-11-18T13:00Z", "2026-11-20T12:00Z", [(1, 0)])
+        rows = self.parse(period)
+        self.assertEqual(len(rows), 47)
+        self.assertTrue(all(row["quantity_mw"] == 0 for row in rows))
+        self.assertEqual(rows[-1]["datetime_utc"], dt.datetime(2026, 11, 20, 11))
 
 
 class CountryFlowsRangeTests(TestCase):

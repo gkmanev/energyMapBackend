@@ -1243,6 +1243,8 @@ class EntsoePhysicalFlows:
         records: List[Dict] = []
 
         for s in series:
+            curve_el = s.find("ns:curveType", ns) if ns else s.find("curveType")
+            curve_type = (curve_el.text or "A01").strip() if curve_el is not None else "A01"
             # out/in domains can appear under the series
             if ns:
                 out_el = s.find(".//ns:out_Domain/ns:mRID", ns) or s.find(".//ns:outBiddingZone_Domain/ns:mRID", ns)
@@ -1286,31 +1288,55 @@ class EntsoePhysicalFlows:
                     base = dt.datetime.fromisoformat(start_el.text.replace("Z", "+00:00"))
                 base = base.astimezone(dt.timezone.utc)
 
+                period_end = None
+                if curve_type == "A03":
+                    end_el = ti.find("ns:end", ns) if ns else ti.find("end")
+                    if end_el is None or not end_el.text:
+                        raise ValueError("A03 physical flow period is missing its end timestamp.")
+                    period_end = dt.datetime.fromisoformat(end_el.text.replace("Z", "+00:00"))
+                    period_end = EntsoePhysicalFlows._ensure_utc(period_end)
+
                 # Points -> position + quantity
                 pts = period.findall(".//ns:Point", ns) if ns else period.findall(".//Point")
+                points = {}
                 for p in pts:
                     pos_el = p.find("ns:position", ns) if ns else p.find("position")
                     q_el   = p.find("ns:quantity", ns) if ns else p.find("quantity")
-                    if q_el is None or q_el.text is None:
-                        continue
                     try:
                         pos = int(pos_el.text) if (pos_el is not None and pos_el.text) else 1
                     except Exception:
                         pos = 1
                     try:
-                        qty = float(q_el.text)
-                    except Exception:
-                        continue
+                        qty = float(q_el.text) if q_el is not None and q_el.text else None
+                    except (TypeError, ValueError):
+                        qty = None
+                    # Keep missing-quantity points as barriers so A03 does not
+                    # carry the previous value across an explicit missing block.
+                    points[pos] = qty
 
+                positions = sorted(points)
+                for index, pos in enumerate(positions):
+                    qty = points[pos]
+                    if pos < 1 or qty is None:
+                        continue
                     ts = base + dt.timedelta(minutes=(pos - 1) * step_min)
-                    # Match your A75 convention: store UTC but naive; convert to ISO later via to_records
-                    records.append({
-                        "datetime_utc": ts.replace(tzinfo=dt.timezone.utc).astimezone(dt.timezone.utc).replace(tzinfo=None),
-                        "out_domain_eic": out_eic,
-                        "in_domain_eic": in_eic,
-                        "quantity_mw": qty,
-                        "resolution": res_iso,
-                    })
+                    block_end = ts + dt.timedelta(minutes=step_min)
+                    if curve_type == "A03":
+                        block_end = period_end
+                        if index + 1 < len(positions):
+                            next_ts = base + dt.timedelta(minutes=(positions[index + 1] - 1) * step_min)
+                            block_end = min(block_end, next_ts)
+                    # A03 points are change positions, not isolated readings.
+                    # Expand only inside this period; never fill inter-period gaps.
+                    while ts < block_end:
+                        records.append({
+                            "datetime_utc": ts.replace(tzinfo=None),
+                            "out_domain_eic": out_eic,
+                            "in_domain_eic": in_eic,
+                            "quantity_mw": qty,
+                            "resolution": res_iso,
+                        })
+                        ts += dt.timedelta(minutes=step_min)
 
         records.sort(key=lambda r: (r["datetime_utc"], r["out_domain_eic"], r["in_domain_eic"]))
         return records
