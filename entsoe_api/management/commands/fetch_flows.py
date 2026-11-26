@@ -81,7 +81,7 @@ DEFAULT_NEIGHBORS_BY_COUNTRY = {
     "AT": {"DE", "CZ", "SK", "HU", "SI", "IT", "CH", "LI"},
     "AZ": {"RU", "GE", "AM", "IR", "TR"},
     "BA": {"HR", "RS", "ME"},
-    "BE": {"FR", "DE", "NL", "LU", "UK"},
+    "BE": {"FR", "DE", "NL", "LU", "GB"},
     # Bulgaria: Romania, Greece, Turkey, Serbia, North Macedonia
     "BG": {"RO", "GR", "TR", "RS", "MK"},
     "BY": {"PL", "LT", "LV", "RU", "UA"},
@@ -93,12 +93,12 @@ DEFAULT_NEIGHBORS_BY_COUNTRY = {
     "EE": {"LV", "RU", "FI"},
     "ES": {"PT", "FR", "AD"},
     "FI": {"SE", "NO", "RU", "EE"},
-    "FR": {"BE", "LU", "DE", "CH", "IT", "ES", "AD", "UK"},
+    "FR": {"BE", "LU", "DE", "CH", "IT", "ES", "AD", "GB"},
     "GE": {"RU", "AM", "AZ", "TR"},
     "GR": {"AL", "MK", "BG", "TR"},
     "HR": {"SI", "HU", "RS", "BA", "ME"},
     "HU": {"AT", "SK", "UA", "RO", "RS", "HR", "SI"},
-    "IE": {"UK"},
+    "IE": {"GB"},
     "IS": set(),
     "IT": {"FR", "CH", "AT", "SI"},
     "LI": {"AT", "CH"},
@@ -110,8 +110,8 @@ DEFAULT_NEIGHBORS_BY_COUNTRY = {
     "ME": {"HR", "BA", "RS", "XK", "AL"},
     "MK": {"AL", "GR", "RS", "BG", "XK"},
     "MT": {"IT"},
-    "NL": {"BE", "DE", "UK"},
-    "NO": {"SE", "FI", "RU", "DK", "UK"},
+    "NL": {"BE", "DE", "GB"},
+    "NO": {"SE", "FI", "RU", "DK", "GB"},
     "PL": {"DE", "CZ", "SK", "UA", "BY", "LT", "SE"},
     "PT": {"ES"},
     "RO": {"UA", "MD", "BG", "RS", "HU"},
@@ -121,9 +121,27 @@ DEFAULT_NEIGHBORS_BY_COUNTRY = {
     "SK": {"CZ", "PL", "UA", "HU", "AT"},
     "TR": {"BG", "GR", "GE", "AM"},
     "UA": {"PL", "SK", "HU", "RO", "MD", "BY", "RU"},
-    "UK": {"IE", "FR", "NL", "BE", "NO"},
+    "GB": {"IE", "FR", "NL", "BE", "NO"},
     "XK": {"AL", "ME", "MK", "RS"},
 }
+
+
+def build_flow_pairs(country_to_eics, countries=None, neighbors_map=None):
+    """Unique directed EIC borders shared by CLI and scheduled refreshes."""
+    if countries is None:
+        countries = country_to_eics.keys()
+    if neighbors_map is None:
+        neighbors_map = getattr(settings, "ENTSOE_NEIGHBORS_BY_COUNTRY", DEFAULT_NEIGHBORS_BY_COUNTRY)
+    pairs = []
+    for country in countries:
+        for neighbor in sorted(neighbors_map.get(country, ())):
+            if neighbor == country or neighbor not in country_to_eics:
+                continue
+            for source in _iter_eics(country_to_eics[country]):
+                for destination in _iter_eics(country_to_eics[neighbor]):
+                    pairs.extend(((source, destination), (destination, source)))
+    return _dedupe_pairs(pairs)
+
 
 class Command(BaseCommand):
     help = (
@@ -154,6 +172,10 @@ class Command(BaseCommand):
             default=24,
             help="Lookback window in hours (default: 24). Ignored if --start/--end provided.",
         )
+        parser.add_argument("--workers", type=int, default=4,
+                            help="Concurrent ENTSO-E requests (1-8; default: 4).")
+        parser.add_argument("--fail-on-error", action="store_true",
+                            help="Fail after saving successful borders if any request failed.")
         parser.add_argument("--start", type=str, help="UTC start ISO, e.g. 2025-10-20T00:00:00Z")
         parser.add_argument("--end", type=str, help="UTC end ISO (exclusive), e.g. 2025-10-21T00:00:00Z")
         parser.add_argument(
@@ -205,7 +227,6 @@ class Command(BaseCommand):
             iso_list = [x.upper().strip() for x in countries]
 
         # Validate and build neighbor ISO pairs (bidirectional)
-        eic_pairs: List[Tuple[str, str]] = []
         missing_isos = [iso for iso in iso_list if iso not in country_to_eics]
         if missing_isos:
             raise CommandError("Unknown ISO code(s): " + ", ".join(sorted(set(missing_isos))))
@@ -213,33 +234,23 @@ class Command(BaseCommand):
         skipped_neighbors_no_eic = set()
         missing_neighbor_map = []
 
-        pair_iso_edges = []
         for src in iso_list:
             neigh = set(neighbors_map.get(src, set()))
             if not neigh:
                 missing_neighbor_map.append(src)
                 continue
             # (src->n) and (n->src), but only if neighbor has an EIC mapping
-            valid_neigh = [n for n in sorted(neigh) if n in country_to_eics and n != src]
             skipped_neighbors_no_eic.update({n for n in neigh if n not in country_to_eics})
 
-            pair_iso_edges.extend((src, n) for n in valid_neigh)
-            pair_iso_edges.extend((n, src) for n in valid_neigh)
 
         if missing_neighbor_map:
             self.stdout.write(self.style.WARNING(
                 "No neighbors configured for: " + ", ".join(sorted(set(missing_neighbor_map)))
             ))
 
-        # Expand ISO pairs to EIC pairs
-        for out_iso, in_iso in pair_iso_edges:
-            out_eics = list(_iter_eics(country_to_eics[out_iso]))
-            in_eics = list(_iter_eics(country_to_eics[in_iso]))
-            for o in out_eics:
-                for i in in_eics:
-                    eic_pairs.append((o, i))
-
-        eic_pairs = _dedupe_pairs(eic_pairs)
+        eic_pairs = build_flow_pairs(country_to_eics, iso_list, neighbors_map)
+        if not 1 <= options["workers"] <= 8:
+            raise CommandError("--workers must be between 1 and 8.")
         if not eic_pairs:
             raise CommandError("No EIC pairs found to query (neighbors-only produced nothing).")
 
@@ -308,24 +319,35 @@ class Command(BaseCommand):
             raise CommandError("Missing ENTSOE_TOKEN in environment or .env file.")
 
         self.stdout.write(f"Fetching A11 flows for {len(eic_pairs)} neighbor-directed EIC pairs...")
-        df = EntsoePhysicalFlows.query_pairs(
-            api_key=api_key,
-            pairs=eic_pairs,
-            start=start,
-            end=end,
-        )
-
-        if df.empty:
-            self.stdout.write(self.style.WARNING("No flow data returned."))
-            return
-
-        written = save_flows_df(df)
+        written = 0
+        failed = []
+        payload = []
+        for pair, df, error in EntsoePhysicalFlows.iter_pairs(
+            api_key=api_key, pairs=eic_pairs, start=start, end=end, workers=options["workers"]
+        ):
+            if error is not None:
+                failed.append(pair)
+                self.stderr.write(f"A11 failed {pair[0]}->{pair[1]}: {type(error).__name__}")
+                continue
+            if df.empty:
+                continue
+            # Commit on the main thread as each border arrives. A slow or failed
+            # neighbor must not hold back already available source publications.
+            count = save_flows_df(df)
+            written += count
+            self.stdout.write(f"Saved {count} rows for {pair[0]}->{pair[1]}")
+            if options.get("output"):
+                payload.extend(df.to_dict(orient="records"))
         self.stdout.write(self.style.SUCCESS(f"Saved {written} cross-border flow rows."))
 
         # ---------- optional JSON output ----------
         out_path = options.get("output")
         if out_path:
-            payload = df.to_dict(orient="records")
             with open(out_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
+                json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
             self.stdout.write(self.style.SUCCESS(f"Wrote JSON to {out_path}"))
+        if failed:
+            message = f"{len(failed)} flow border requests failed; successful borders were saved."
+            if options["fail_on_error"]:
+                raise CommandError(message)
+            self.stderr.write(self.style.WARNING(message))

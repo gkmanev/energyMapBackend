@@ -2,6 +2,7 @@
 
 import datetime as dt
 import itertools
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, List, Dict, Union, Iterable, Tuple
 import xml.etree.ElementTree as ET
 
@@ -1116,9 +1117,12 @@ class EntsoePhysicalFlows:
       ['datetime_utc','out_domain_eic','in_domain_eic','quantity_MW','resolution']
     """
 
-    def __init__(self, api_key: str, session: Optional[requests.Session] = None):
+    def __init__(self, api_key: str, session: Optional[requests.Session] = None,
+                 request_timeout: int = 45, max_retries: int = 5):
         self.api_key = api_key
         self.session = session or requests.Session()
+        self.request_timeout = request_timeout
+        self.max_retries = max_retries
 
     # ---------- helpers ----------
 
@@ -1368,7 +1372,8 @@ class EntsoePhysicalFlows:
             "periodEnd": self._to_utc_compact(end_utc),
             "securityToken": self.api_key,
         }
-        xml_text = self._request_with_retries(params)
+        xml_text = self._request_with_retries(params, timeout=self.request_timeout,
+                                            max_retries=self.max_retries)
         rows = self._parse_a11(xml_text, out_domain_eic, in_domain_eic)
         if not rows:
             return pd.DataFrame(columns=["datetime_utc","out_domain_eic","in_domain_eic","quantity_MW","resolution"])
@@ -1381,6 +1386,34 @@ class EntsoePhysicalFlows:
         df = df[(df["datetime_utc"] >= start_utc.replace(tzinfo=None)) &
                 (df["datetime_utc"] <  end_utc.replace(tzinfo=None))]
         return df
+
+    @classmethod
+    def iter_pairs(cls, api_key, pairs, start, end, workers=4):
+        """Yield completed border frames; each thread owns its HTTP session.
+
+        Exceptions are returned to the caller so successful borders can be saved
+        before a failed border is reported. Never log exception URLs (tokens).
+        """
+        if not 1 <= workers <= 8:
+            raise ValueError("workers must be between 1 and 8.")
+
+        def fetch(pair):
+            client = cls(api_key)
+            try:
+                return client.get_range(*pair, start=start, end=end)
+            finally:
+                client.session.close()
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(fetch, pair): pair for pair in pairs}
+            for future in as_completed(futures):
+                pair = futures[future]
+                try:
+                    frame = future.result()
+                except Exception as exc:
+                    yield pair, None, exc
+                else:
+                    yield pair, frame, None
 
     @classmethod
     def query_pairs(

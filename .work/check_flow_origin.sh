@@ -1,0 +1,2 @@
+docker compose exec -T web python -c 'import requests,json; r=requests.get("http://127.0.0.1:8000/api/flows/latest/",params={"country":"BG","neighbors":1},headers={"Host":"api.visualize.energy"},timeout=30); p=r.json(); print("ORIGIN_HTTP",r.status_code,json.dumps({k:p.get(k) for k in ["start_utc","count","totals","neighbors"]}))'
+docker compose exec -T celery_worker celery -A data_api inspect active --timeout 5
